@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ADRIA GOLD - Objednávkový systém</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         @media print {
@@ -273,6 +273,15 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.worker.min.js';
     </script>
     <script>
+        // --- Globální proměnné ---
+        let currentUser = null;
+        let products = {};
+        let users = {};
+        let currentOrder = {};
+        let currentOrderId = null;
+        let orderingDeadline = null;
+        const ADMIN_PASSWORD_KEY = 'admingold_password';
+        const ADMIN_DEFAULT_PASSWORD = 'admin123';
         // Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyAdhvcOnksDf_cUGp5MUfjHnghH4d4KVg8",
@@ -287,365 +296,11 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const storage = firebase.storage();
-        
-        // Initialize Firebase Functions SDK
         const functions = firebase.functions();
-        // Pokud vyvíjíte lokálně s Firebase emulátorem, odkomentujte následující řádek:
-        // if (location.hostname === "localhost") {
-        //     functions.useEmulator("http://localhost:5001");
-        // }
         
-        // Global variables
-        let currentUser = null;
-        let products = {}; // Produkty načtené pro hlavní obrazovku a pro vyhledávání
-        let users = {};    // Uživatelé načtení pro vyhledávání a admin panel
-        let currentOrder = {}; // Aktuální objednávka vybraného uživatele
-        let currentOrderId = null; // ID dokumentu pro aktuální objednávku ve Firebase
-        let orderingDeadline = null; // Termín uzavření objednávek
-        const ADMIN_PASSWORD_KEY = 'admingold_password'; // Klíč pro uložení hesla admina v localStorage
-
-        // Initialize app
-        window.onload = async function() {
-            await loadUsers(); // Načte uživatele pro hlavní vyhledávání
-            await loadProducts(); // Načte produkty pro hlavní obrazovku a admin panel
-            await loadSettings(); // Načte nastavení pro deadline a admin heslo
-            checkOrderingStatus(); // Aktualizuje stav příjmu objednávek na hlavní obrazovce
-            checkAdminAuthStatus(); // Kontroluje, zda byl admin přihlášen v minulé relaci
-        };
-
-        // --- Firebase a Data Loading ---
-        async function loadUsers() {
-            try {
-                const snapshot = await db.collection('users').get();
-                users = {};
-                snapshot.forEach(doc => {
-                    users[doc.id] = doc.data();
-                });
-                // Pokud je admin panel otevřen, aktualizujeme i jeho seznam uživatelů
-                if (document.getElementById('adminPanel').classList.contains('active')) {
-                    loadUsersAdmin(); 
-                }
-            } catch (error) {
-                console.error("Chyba při načítání uživatelů:", error);
-                // Nemusí být alert pro běžného uživatele, pokud to není kritické pro UI
-            }
-        }
-
-        async function loadProducts() {
-            try {
-                const snapshot = await db.collection('products').get();
-                products = {};
-                snapshot.forEach(doc => {
-                    products[doc.id] = { id: doc.id, ...doc.data() };
-                });
-                // Pokud je admin panel otevřen, aktualizujeme i jeho seznam produktů
-                if (document.getElementById('adminPanel').classList.contains('active')) {
-                    displayProductsAdmin(); 
-                }
-            } catch (error) {
-                console.error("Chyba při načítání produktů:", error);
-                // Nemusí být alert pro běžného uživatele
-            }
-        }
-
-        // --- User Selection (Main Screen) ---
-        function searchUsers() {
-            const query = document.getElementById('userSearch').value.toLowerCase();
-            const resultsDiv = document.getElementById('userSearchResults');
-            
-            if (query.length < 2) {
-                resultsDiv.classList.add('hidden');
-                return;
-            }
-
-            const results = Object.entries(users).filter(([email, user]) => 
-                user.name.toLowerCase().includes(query)
-            ).slice(0, 10);
-
-            if (results.length === 0) {
-                resultsDiv.innerHTML = `
-                    <div class="p-4 text-center">
-                        <p class="text-gray-600 mb-2">Uživatel nenalezen</p>
-                        <button onclick="addNewUser('${query}')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                            Přidat nového uživatele
-                        </button>
-                    </div>
-                `;
-                resultsDiv.classList.remove('hidden');
-                return;
-            }
-
-            resultsDiv.innerHTML = results.map(([email, user]) => `
-                <div onclick="selectUser('${email}')" class="p-3 hover:bg-gray-100 cursor-pointer border-b">
-                    <div class="font-semibold">${user.name}</div>
-                </div>
-            `).join('');
-            
-            resultsDiv.classList.remove('hidden');
-        }
-
-        async function addNewUser(searchQuery) {
-            const name = prompt('Zadejte celé jméno:', searchQuery);
-            if (!name) return;
-            
-            const email = prompt('Zadejte email:');
-            if (!email || !email.includes('@')) {
-                alert('Neplatný email');
-                return;
-            }
-
-            try {
-                await db.collection('users').doc(email).set({
-                    name: name.trim(),
-                    email: email.trim()
-                });
-                await loadUsers(); // Znovu načíst uživatele, aby se nový zobrazil
-                await selectUser(email); 
-                alert('Uživatel přidán');
-            } catch (error) {
-                alert('Chyba při přidávání uživatele: ' + error.message);
-            }
-        }
-
-        async function selectUser(email) {
-            currentUser = { email, ...users[email] };
-            document.getElementById('selectedUserName').textContent = currentUser.name;
-            document.getElementById('selectedUser').classList.remove('hidden');
-            document.getElementById('productSection').classList.remove('hidden');
-            document.getElementById('orderSection').classList.remove('hidden');
-            document.getElementById('userSearchResults').classList.add('hidden');
-            document.getElementById('userSearch').value = '';
-            document.getElementById('productSearch').value = ''; 
-            document.getElementById('productSearchResults').classList.add('hidden');
-            document.getElementById('manualProductAdd').classList.add('hidden'); 
-            await loadUserCurrentOrder(); 
-        }
-
-        async function loadUserCurrentOrder() {
-            if (!currentUser) return;
-
-            // Načítáme aktivní objednávku, jejíž ID dokumentu je e-mail uživatele
-            const orderDoc = await db.collection('orders').doc(currentUser.email).get();
-            
-            currentOrder = {}; 
-            currentOrderId = null; 
-
-            if (orderDoc.exists) {
-                const orderData = orderDoc.data();
-                // Kontrola, zda je objednávka opravdu aktivní, aby nedošlo k načtení archivované
-                if (orderData.status === 'active') {
-                    currentOrderId = orderDoc.id; // E-mail uživatele
-                    
-                    Object.entries(orderData.items).forEach(([productId, quantity]) => {
-                        if (products[productId]) { 
-                            currentOrder[productId] = {
-                                ...products[productId],
-                                quantity: quantity
-                            };
-                        }
-                    });
-                } else {
-                    // Pokud existuje dokument, ale status není 'active', začneme s prázdnou
-                    console.log("Nalezena neaktivní objednávka pro uživatele, začínám novou.");
-                }
-            }
-            updateOrderDisplay();
-        }
-
-        // --- Product Selection and Order Management (Main Screen) ---
-        function searchProducts() {
-            const query = document.getElementById('productSearch').value.toLowerCase();
-            const resultsDiv = document.getElementById('productSearchResults');
-            
-            if (query.length < 2) {
-                resultsDiv.classList.add('hidden');
-                document.getElementById('manualProductAdd').classList.add('hidden'); 
-                return;
-            }
-
-            const results = Object.values(products).filter(product => 
-                product.name.toLowerCase().includes(query) || (product.id && product.id.toString().includes(query))
-            ).slice(0, 20);
-
-            if (results.length === 0) {
-                resultsDiv.classList.add('hidden');
-                document.getElementById('manualProductAdd').classList.add('hidden'); 
-                return;
-            }
-
-            resultsDiv.innerHTML = results.map(product => `
-                <div onclick="selectProductForOrder('${product.id}')" class="p-3 hover:bg-gray-100 cursor-pointer border-b flex justify-between items-center">
-                    <div>
-                        <div class="font-semibold">${product.name}</div>
-                        <div class="text-sm text-gray-600">${product.price} Kč (ID: ${product.id})</div>
-                    </div>
-                </div>
-            `).join('');
-            
-            resultsDiv.classList.remove('hidden');
-        }
-
-        function selectProductForOrder(productId) {
-            const product = products[productId];
-            if (!product) return;
-
-            document.getElementById('selectedProductName').textContent = `${product.name} (${product.price} Kč)`;
-            document.getElementById('selectedProductId').value = productId;
-            document.getElementById('productQuantityInput').value = currentOrder[productId] ? currentOrder[productId].quantity : 1;
-            
-            document.getElementById('manualProductAdd').classList.remove('hidden');
-            document.getElementById('productSearchResults').classList.add('hidden'); 
-            document.getElementById('productSearch').value = product.name; 
-        }
-
-        async function addProductToOrderManual() { 
-            // Kontrola, zda jsou objednávky povoleny
-            if (orderingDeadline && new Date() > orderingDeadline) {
-                alert('Příjem objednávek je již uzavřen.');
-                return;
-            }
-
-            const productId = document.getElementById('selectedProductId').value;
-            const quantity = parseInt(document.getElementById('productQuantityInput').value);
-
-            if (!productId || isNaN(quantity) || quantity <= 0) {
-                alert('Vyberte produkt a zadejte platné množství (větší než 0).');
-                return;
-            }
-
-            const product = products[productId];
-            if (!product || !currentUser) {
-                alert('Nejdříve vyberte uživatele a platný produkt.');
-                return;
-            }
-
-            currentOrder[productId] = {
-                ...product,
-                quantity: quantity
-            };
-
-            await saveOrder();
-            await loadUserCurrentOrder(); 
-            
-            document.getElementById('manualProductAdd').classList.add('hidden');
-            document.getElementById('selectedProductName').textContent = '';
-            document.getElementById('selectedProductId').value = '';
-            document.getElementById('productQuantityInput').value = '1';
-            document.getElementById('productSearch').value = ''; 
-        }
-
-        function updateOrderDisplay() {
-            const tbody = document.getElementById('orderItems');
-            let total = 0;
-
-            if (Object.keys(currentOrder).length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500 p-4">Zatím žádné produkty</td></tr>';
-            } else {
-                tbody.innerHTML = Object.entries(currentOrder).map(([id, item]) => {
-                    const itemTotal = item.price * item.quantity;
-                    total += itemTotal;
-                    return `
-                        <tr class="border-b">
-                            <td class="p-2">
-                                <div>${item.name}</div>
-                            </td>
-                            <td class="p-2 text-center">
-                                <input type="number" value="${item.quantity}" min="1" 
-                                       onchange="updateQuantity('${id}', this.value)"
-                                       class="w-20 px-2 py-1 border rounded text-center">
-                            </td>
-                            <td class="p-2 text-right">${item.price} Kč</td>
-                            <td class="p-2 text-right font-semibold">${itemTotal} Kč</td>
-                            <td class="p-2 text-center">
-                                <button onclick="removeFromOrder('${id}')" class="text-red-600 hover:text-red-800">✕</button>
-                            </td>
-                        </tr>
-                    `;
-                }).join('');
-            }
-
-            document.getElementById('totalPrice').textContent = total + ' Kč';
-        }
-
-        async function updateQuantity(productId, newQuantity) { 
-            // Kontrola, zda jsou objednávky povoleny
-            if (orderingDeadline && new Date() > orderingDeadline) {
-                alert('Příjem objednávek je již uzavřen.');
-                await loadUserCurrentOrder(); // Obnovit stav, pokud byla změna zamítnuta
-                return;
-            }
-
-            const qty = parseInt(newQuantity);
-            if (currentOrder[productId]) {
-                if (qty > 0) {
-                    currentOrder[productId].quantity = qty;
-                } else { 
-                    delete currentOrder[productId];
-                }
-                updateOrderDisplay();
-                await saveOrder();
-                await loadUserCurrentOrder(); 
-            }
-        }
-
-        async function removeFromOrder(productId) { 
-            // Kontrola, zda jsou objednávky povoleny
-            if (orderingDeadline && new Date() > orderingDeadline) {
-                alert('Příjem objednávek je již uzavřen.');
-                await loadUserCurrentOrder(); // Obnovit stav, pokud byla změna zamítnuta
-                return;
-            }
-
-            if (currentOrder[productId]) {
-                delete currentOrder[productId];
-            }
-            updateOrderDisplay();
-            await saveOrder();
-            await loadUserCurrentOrder(); 
-        }
-
-        async function saveOrder() {
-            if (!currentUser) {
-                console.warn('Nelze uložit objednávku: Uživatel není vybrán.');
-                return;
-            }
-
-            const itemsToSave = {};
-            let totalPrice = 0;
-            Object.entries(currentOrder).forEach(([id, item]) => {
-                itemsToSave[id] = item.quantity;
-                totalPrice += item.price * item.quantity;
-            });
-
-            const orderData = {
-                userId: currentUser.email, // Uložíme e-mail jako userId
-                userName: currentUser.name,
-                userEmail: currentUser.email, // Pro snazší dohledávání v adminu
-                items: itemsToSave,
-                totalPrice: totalPrice,
-                timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                status: 'active', // Výchozí status objednávky
-                paid: false // Nové pole pro stav platby, výchozí je false
-            };
-
-            try {
-                // Použijeme e-mail uživatele jako ID dokumentu objednávky
-                // To zajistí, že každý uživatel má pouze jeden aktivní dokument objednávky
-                await db.collection('orders').doc(currentUser.email).set(orderData, { merge: true });
-                currentOrderId = currentUser.email; // Aktualizujeme currentOrderId na e-mail
-                console.log('Objednávka uložena/aktualizována pro uživatele:', currentUser.email);
-            } catch (error) {
-                console.error('Chyba při ukládání objednávky do Firebase:', error);
-                alert('Chyba při ukládání objednávky: ' + error.message);
-            }
-        }
-
-        // --- Admin Functions ---
-        const ADMIN_DEFAULT_PASSWORD = 'admin123'; 
-        const ADMIN_PASSWORD_STORAGE_KEY = 'admingold_password'; // Klíč pro uložení hesla admina v localStorage
-
+        // --- Funkce ---
         function showAdminLogin() {
-            const storedPassword = localStorage.getItem(ADMIN_PASSWORD_STORAGE_KEY);
+            const storedPassword = localStorage.getItem(ADMIN_PASSWORD_KEY);
             let passwordPrompt = prompt('Zadejte admin heslo:');
 
             if (passwordPrompt === (storedPassword || ADMIN_DEFAULT_PASSWORD)) {
@@ -662,7 +317,6 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             sessionStorage.removeItem('isAdminLoggedIn');
             document.getElementById('adminPanel').classList.add('hidden');
             document.getElementById('mainScreen').classList.remove('hidden');
-            checkOrderingStatus(); 
         }
 
         function checkAdminAuthStatus() {
@@ -674,15 +328,11 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
 
         async function loadAdminData() {
-            // Načtení dat pro všechny admin záložky
-            await loadOrders(); // Pro záložku Objednávky
-            await displayProductsAdmin(); // Pro záložku Produkty
-            await loadUsersAdmin(); // Pro záložku Import dat - uživatelé
-            await updateBilling(); // Pro záložku Vyúčtování
-            await loadSettings(); // Pro záložku Nastavení (deadline, heslo)
-            
-            // Aktivujeme výchozí záložku (Objednávky) po načtení dat
-            showAdminTab('orders'); 
+            await loadProducts();
+            await loadUsers();
+            await loadOrders();
+            if (typeof displayProductsAdmin === 'function') displayProductsAdmin();
+            if (typeof displayProducts === 'function') displayProducts();
         }
         
         // Pomocná funkce pro přepínání záložek
@@ -702,6 +352,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         // --- Admin: Orders Tab ---
         let allOrders = []; // Globální proměnná pro všechny objednávky v adminu
         async function loadOrders() {
+            await loadProducts(); // Zajistí, že produkty jsou aktuální
             try {
                 // Načítáme všechny objednávky pro zobrazení
                 const snapshot = await db.collection('orders').orderBy('timestamp', 'desc').get();
@@ -801,6 +452,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
 
         async function printOrders() {
+            await loadProducts(); // Zajistí, že produkty jsou aktuální
             const printWindow = window.open('', '', 'height=600,width=800');
             printWindow.document.write('<html><head><title>Tisk objednávek</title>');
             printWindow.document.write('<style>'+`
@@ -944,66 +596,54 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         // --- Admin: Products Tab ---
         // Produkty pro admin panel (s možností editace/mazání)
         // Používáme globální 'products' objekt pro data
-        async function displayProductsAdmin(page = 0) { 
+        async function displayProductsAdmin(page = 0) {
+            await loadProducts();
             const productsListDiv = document.getElementById('productsList');
             productsListDiv.innerHTML = '<p class="text-gray-600 p-4">Načítám produkty...</p>';
-
-            try {
-                const productArray = Object.values(products); // Používáme globální 'products' objekt
-                let html = '<div class="mb-4 flex justify-between items-center">' +
-                           '<h4 class="font-semibold">Aktuální produkty:</h4>' +
-                           '<input type="text" placeholder="Hledat produkt..." onkeyup="filterProductsAdmin(this.value)" class="px-3 py-1 border rounded">' +
-                           '</div>';
-
-                if (productArray.length === 0) {
-                    html += '<p class="text-gray-600 p-4">Žádné produkty k zobrazení.</p>';
-                    productsListDiv.innerHTML = html;
-                    return;
-                }
-
-                const productsPerPage = 20; 
-                const totalPages = Math.ceil(productArray.length / productsPerPage);
-                const start = page * productsPerPage;
-                const end = start + productsPerPage;
-                const pageProducts = productArray.slice(start, end);
-
-                html += '<div class="overflow-x-auto"><table class="w-full"><thead><tr class="bg-gray-100">' +
-                    '<th class="p-2 text-left">ID</th>' +
-                    '<th class="p-2 text-left">Název</th>' +
-                    '<th class="p-2 text-right">Cena</th>' +
-                    '<th class="p-2 text-center">Akce</th>' +
-                    '</tr></thead><tbody id="productsTableBody">';
-
-                pageProducts.forEach(product => {
-                    html += `
-                        <tr class="border-b product-row">
-                            <td class="p-2">${product.id}</td>
-                            <td class="p-2">${product.name}</td>
-                            <td class="p-2 text-right">${product.price} Kč</td>
-                            <td class="p-2 text-center">
-                                <button onclick="editProduct('${product.id}')" class="bg-yellow-500 text-white px-3 py-1 rounded text-sm hover:bg-yellow-600">Upravit</button>
-                                <button onclick="deleteProduct('${product.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600 ml-1">Smazat</button>
-                            </td>
-                        </tr>
-                    `;
-                });
-                html += '</tbody></table></div>';
-
-                if (totalPages > 1) {
-                    html += '<div class="mt-4 flex justify-center space-x-2">';
-                    for (let i = 0; i < totalPages; i++) {
-                        html += `<button onclick="displayProductsAdmin(${i})" class="px-3 py-1 rounded ${i === page ? 'bg-blue-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}">${i + 1}</button>`;
-                    }
-                    html += '</div>';
-                }
-                html += `<p class="text-sm text-gray-600 mt-2">Zobrazeno ${pageProducts.length} z ${Object.keys(products).length} produktů</p>`;
-                
+            const productArray = Object.values(products);
+            let html = '<div class="mb-4 flex justify-between items-center">' +
+                       '<h4 class="font-semibold">Aktuální produkty:</h4>' +
+                       '<input type="text" placeholder="Hledat produkt..." onkeyup="filterProductsAdmin(this.value)" class="px-3 py-1 border rounded">' +
+                       '</div>';
+            if (productArray.length === 0) {
+                html += '<p class="text-gray-600 p-4">Žádné produkty k zobrazení.</p>';
                 productsListDiv.innerHTML = html;
-
-            } catch (error) {
-                console.error("Chyba při načítání produktů pro admina:", error);
-                productsListDiv.innerHTML = '<p class="text-red-600 p-4">Chyba při načítání produktů.</p>';
+                return;
             }
+            const productsPerPage = 20;
+            const totalPages = Math.ceil(productArray.length / productsPerPage);
+            const start = page * productsPerPage;
+            const end = start + productsPerPage;
+            const pageProducts = productArray.slice(start, end);
+            html += '<div class="overflow-x-auto"><table class="w-full"><thead><tr class="bg-gray-100">' +
+                '<th class="p-2 text-left">ID</th>' +
+                '<th class="p-2 text-left">Název</th>' +
+                '<th class="p-2 text-right">Cena</th>' +
+                '<th class="p-2 text-center">Akce</th>' +
+                '</tr></thead><tbody id="productsTableBody">';
+            pageProducts.forEach(product => {
+                html += `
+                    <tr class="border-b product-row">
+                        <td class="p-2">${product.id}</td>
+                        <td class="p-2">${product.name}</td>
+                        <td class="p-2 text-right">${product.price} Kč</td>
+                        <td class="p-2 text-center">
+                            <button onclick="editProduct('${product.id}')" class="bg-yellow-500 text-white px-3 py-1 rounded text-sm hover:bg-yellow-600">Upravit</button>
+                            <button onclick="deleteProduct('${product.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600 ml-1">Smazat</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table></div>';
+            if (totalPages > 1) {
+                html += '<div class="mt-4 flex justify-center space-x-2">';
+                for (let i = 0; i < totalPages; i++) {
+                    html += `<button onclick="displayProductsAdmin(${i})" class="px-3 py-1 rounded ${i === page ? 'bg-blue-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}">${i + 1}</button>`;
+                }
+                html += '</div>';
+            }
+            html += `<p class="text-sm text-gray-600 mt-2">Zobrazeno ${pageProducts.length} z ${Object.keys(products).length} produktů</p>`;
+            productsListDiv.innerHTML = html;
         }
         
         function filterProductsAdmin(query) {
@@ -1309,16 +949,17 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
                 ordersSnapshot.forEach(orderDoc => {
                     const order = orderDoc.data();
-                    // Zde je důležité, že ID dokumentu objednávky je e-mail uživatele
-                    // order.id je ID dokumentu, order.userId je pole v dokumentu (zde také e-mail)
-                    const userId = order.userId; 
+                    const userId = order.userId;
+                    const userObj = users[userId];
+                    const userName = userObj ? userObj.name : (order.userName || 'Neznámý uživatel');
+                    const userEmail = userObj ? userObj.email : (order.userEmail || userId);
 
                     if (!usersBillingData[userId]) {
                         usersBillingData[userId] = {
-                            userName: order.userName,
-                            userEmail: order.userEmail,
+                            userName: userName,
+                            userEmail: userEmail,
                             totalAmount: 0,
-                            orders: [] // Seznam objednávek pro tohoto uživatele
+                            orders: []
                         };
                     }
                     usersBillingData[userId].orders.push(order);
@@ -1374,7 +1015,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                                     ${markPaidUnpaidButtons}
                                     <button onclick="showEmailPreview('${user.userEmail}')" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">Náhled emailu</button>
                                     <button onclick="generatePaymentQR('${user.userEmail}', ${userTotal}, '${user.userName}')" class="bg-purple-500 text-white px-3 py-1 rounded text-sm hover:bg-purple-600">QR Kód</button>
-                                    <button onclick="sendSingleBillingEmailCloudFunction('${user.userEmail}', ${hasUnpaidOrder})" 
+                                    <button onclick="sendSingleBillingEmailCloudFunction('${user.userEmail}', ${userTotal}, '${user.userName}')" 
                                             class="bg-green-700 text-white px-3 py-1 rounded text-sm hover:bg-green-800 ${!hasUnpaidOrder ? 'opacity-50 cursor-not-allowed' : ''}"
                                             ${!hasUnpaidOrder ? 'disabled' : ''}>
                                         Odeslat e-mail s vyúčtováním ${hasUnpaidOrder ? '' : '(vše zaplaceno)'}
@@ -1486,8 +1127,9 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
 
         // --- Email Preview for Billing ---
-        async function showEmailPreview(userEmail) { // Přijímá userEmail jako ID uživatele
+        async function showEmailPreview(userEmail) {
             const user = users[userEmail];
+            const userName = user ? user.name : userEmail;
             if (!user) {
                 alert('Uživatel nenalezen.');
                 return;
@@ -1500,7 +1142,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 .get();
             
             if (ordersSnapshot.empty) {
-                alert(`Pro uživatele ${user.name} (${userEmail}) nejsou žádné aktivní objednávky.`);
+                alert(`Pro uživatele ${userName} (${userEmail}) nejsou žádné aktivní objednávky.`);
                 return;
             }
 
@@ -1547,7 +1189,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             `;
 
             const previewWindow = window.open('', '_blank', 'width=700,height=800,scrollbars=yes');
-            previewWindow.document.write('<html><head><title>Náhled e-mailu pro ' + user.name + '</title></head><body>');
+            previewWindow.document.write('<html><head><title>Náhled e-mailu pro ' + userName + '</title></head><body>');
             previewWindow.document.write(emailContent);
             previewWindow.document.write('</body></html>');
             previewWindow.document.close();
@@ -1564,6 +1206,67 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        }
+
+        async function resetAllOrders() {
+            if (!confirm('Opravdu chcete smazat všechny aktivní objednávky (přesunout do archivu)?')) return;
+            await loadProducts(); // Zajistí, že produkty jsou aktuální
+            const batch = db.batch();
+            const snapshot = await db.collection('orders').where('status', '==', 'active').get();
+            snapshot.forEach(doc => {
+                batch.update(doc.ref, { status: 'archived' });
+            });
+            await batch.commit();
+            alert('Všechny aktivní objednávky byly archivovány.');
+            await loadOrders(); // Znovu načíst objednávky, aby se správně propsaly produkty
+        }
+
+        // --- Firebase a Data Loading ---
+        async function loadUsers() {
+            const snapshot = await db.collection('users').get();
+            users = {};
+            snapshot.forEach(doc => {
+                users[doc.id] = { id: doc.id, ...doc.data() };
+            });
+        }
+
+        async function loadProducts() {
+            const snapshot = await db.collection('products').get();
+            products = {};
+            snapshot.forEach(doc => {
+                products[doc.id] = { id: doc.id, ...doc.data() };
+            });
+        }
+
+        // --- User Selection (Main Screen) ---
+        function searchUsers() {
+            const query = document.getElementById('userSearch').value.toLowerCase();
+            const resultsDiv = document.getElementById('userSearchResults');
+            if (query.length < 2) {
+                resultsDiv.classList.add('hidden');
+                return;
+            }
+            const results = Object.entries(users).filter(([email, user]) => 
+                user.name.toLowerCase().includes(query)
+            ).slice(0, 10);
+            if (results.length === 0) {
+                resultsDiv.innerHTML = `
+                    <div class="p-4 text-center">
+                        <p class="text-gray-600 mb-2">Uživatel nenalezen</p>
+                        <button onclick="addNewUser('${query}')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                            Přidat nového uživatele
+                        </button>
+                    </div>
+                `;
+                resultsDiv.classList.remove('hidden');
+                return;
+            }
+            resultsDiv.innerHTML = results.map(([email, user]) => `
+                <div onclick="selectUser('${email}')" class="p-3 hover:bg-gray-100 cursor-pointer border-b">
+                    <div class="font-semibold">${user.name}</div>
+                </div>
+            `).join('');
+            resultsDiv.classList.remove('hidden');
         }
     </script>
 </body>
