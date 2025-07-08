@@ -145,6 +145,9 @@
                     <div class="mb-4 flex justify-between print-hidden">
                         <h3 class="text-xl font-semibold">Aktuální objednávky</h3>
                         <div class="space-x-2">
+                            <input type="text" id="orderSearch" placeholder="Hledat uživatele nebo status..." 
+                               class="px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               oninput="filterOrders()">
                             <button onclick="exportOrdersToCSV()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                                 Export CSV pro eshop
                             </button>
@@ -157,7 +160,7 @@
                         </div>
                     </div>
                     <div id="ordersList" class="overflow-x-auto"></div>
-                     <div id="print-content" style="display: none;"></div>
+                     <div id="print-content" style="display: none;"></div> 
                 </div>
 
                 <div id="productsTab" class="admin-tab-content hidden">
@@ -227,7 +230,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     <h3 class="text-xl font-semibold mb-4">Vyúčtování</h3>
                     <div id="billingList"></div>
                     <button onclick="sendAllBillingEmails()" class="mt-4 bg-green-700 text-white px-4 py-2 rounded hover:bg-green-800">
-                        Odeslat vyúčtování všem
+                        Odeslat vyúčtování všem nezaplaceným
                     </button>
                     <div id="sendEmailStatus" class="mt-2 text-sm text-gray-700"></div>
                 </div>
@@ -272,12 +275,12 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
     <script>
         // Firebase Configuration
         const firebaseConfig = {
-            apiKey: "YOUR_API_KEY", // NAHRAĎTE SVÝM API KLÍČEM
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com", // NAHRAĎTE SVÝM PROJECT ID
-            projectId: "YOUR_PROJECT_ID", // NAHRAĎTE SVÝM PROJECT ID
-            storageBucket: "YOUR_PROJECT_ID.appspot.com", // NAHRAĎTE SVÝM PROJECT ID
-            messagingSenderId: "YOUR_MESSAGING_SENDER_ID", // NAHRAĎTE SVÝM MESSAGING SENDER ID
-            appId: "YOUR_APP_ID" // NAHRAĎTE SVÝM APP ID
+            apiKey: "AIzaSyAdhvcOnksDf_cUGp5MUfjHnghH4d4KVg8",
+            authDomain: "adria-gold-objednavky.firebaseapp.com",
+            projectId: "adria-gold-objednavky",
+            storageBucket: "adria-gold-objednavky.firebasestorage.app",
+            messagingSenderId: "643448659480",
+            appId: "1:643448659480:web:bd0ea9b3c92deebe6bed6d"
         };
 
         // Initialize Firebase
@@ -421,27 +424,30 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         async function loadUserCurrentOrder() {
             if (!currentUser) return;
 
-            const snapshot = await db.collection('orders')
-                .where('userId', '==', currentUser.email)
-                .where('status', '==', 'active')
-                .get();
+            // Načítáme aktivní objednávku, jejíž ID dokumentu je e-mail uživatele
+            const orderDoc = await db.collection('orders').doc(currentUser.email).get();
             
             currentOrder = {}; 
             currentOrderId = null; 
 
-            if (!snapshot.empty) {
-                const orderDoc = snapshot.docs[0];
+            if (orderDoc.exists) {
                 const orderData = orderDoc.data();
-                currentOrderId = orderDoc.id; 
-                
-                Object.entries(orderData.items).forEach(([productId, quantity]) => {
-                    if (products[productId]) { 
-                        currentOrder[productId] = {
-                            ...products[productId],
-                            quantity: quantity
-                        };
-                    }
-                });
+                // Kontrola, zda je objednávka opravdu aktivní, aby nedošlo k načtení archivované
+                if (orderData.status === 'active') {
+                    currentOrderId = orderDoc.id; // E-mail uživatele
+                    
+                    Object.entries(orderData.items).forEach(([productId, quantity]) => {
+                        if (products[productId]) { 
+                            currentOrder[productId] = {
+                                ...products[productId],
+                                quantity: quantity
+                            };
+                        }
+                    });
+                } else {
+                    // Pokud existuje dokument, ale status není 'active', začneme s prázdnou
+                    console.log("Nalezena neaktivní objednávka pro uživatele, začínám novou.");
+                }
             }
             updateOrderDisplay();
         }
@@ -618,15 +624,15 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 items: itemsToSave,
                 totalPrice: totalPrice,
                 timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                status: 'active', // Výchozí status
-                paid: false // Nové pole pro stav platby
+                status: 'active', // Výchozí status objednávky
+                paid: false // Nové pole pro stav platby, výchozí je false
             };
 
             try {
-                // Přepíšeme/vytvoříme dokument s userId jako ID dokumentu
-                // To zajistí, že každý uživatel má jen jeden aktivní dokument objednávky
+                // Použijeme e-mail uživatele jako ID dokumentu objednávky
+                // To zajistí, že každý uživatel má pouze jeden aktivní dokument objednávky
                 await db.collection('orders').doc(currentUser.email).set(orderData, { merge: true });
-                currentOrderId = currentUser.email; // Uložíme ID dokumentu (e-mail)
+                currentOrderId = currentUser.email; // Aktualizujeme currentOrderId na e-mail
                 console.log('Objednávka uložena/aktualizována pro uživatele:', currentUser.email);
             } catch (error) {
                 console.error('Chyba při ukládání objednávky do Firebase:', error);
@@ -636,10 +642,10 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- Admin Functions ---
         const ADMIN_DEFAULT_PASSWORD = 'admin123'; 
+        const ADMIN_PASSWORD_STORAGE_KEY = 'admingold_password'; // Klíč pro uložení hesla admina v localStorage
 
         function showAdminLogin() {
-            // Kontrola stavu přihlášení admina a zobrazení hesla
-            const storedPassword = localStorage.getItem(ADMIN_PASSWORD_KEY);
+            const storedPassword = localStorage.getItem(ADMIN_PASSWORD_STORAGE_KEY);
             let passwordPrompt = prompt('Zadejte admin heslo:');
 
             if (passwordPrompt === (storedPassword || ADMIN_DEFAULT_PASSWORD)) {
@@ -647,7 +653,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 document.getElementById('mainScreen').classList.add('hidden');
                 document.getElementById('adminPanel').classList.remove('hidden');
                 loadAdminData(); // Načte data pro admin panel po přihlášení
-            } else if (passwordPrompt) { // Pokud uživatel něco zadal, ale špatně
+            } else if (passwordPrompt) { 
                 alert('Nesprávné heslo');
             }
         }
@@ -656,7 +662,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             sessionStorage.removeItem('isAdminLoggedIn');
             document.getElementById('adminPanel').classList.add('hidden');
             document.getElementById('mainScreen').classList.remove('hidden');
-            checkOrderingStatus(); // Znovu zkontroluj stav objednávek po odhlášení admina
+            checkOrderingStatus(); 
         }
 
         function checkAdminAuthStatus() {
@@ -668,13 +674,14 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
 
         async function loadAdminData() {
-            await loadOrders();
-            await displayProductsAdmin(); // Voláme pro zobrazení produktů v adminu
-            await loadSettings(); // Načítá i nastavení deadlinu a password
-            await updateBilling(); // Aktualizuje vyúčtování
-            loadUsersAdmin(); // Voláme pro zobrazení uživatelů v adminu
+            // Načtení dat pro všechny admin záložky
+            await loadOrders(); // Pro záložku Objednávky
+            await displayProductsAdmin(); // Pro záložku Produkty
+            await loadUsersAdmin(); // Pro záložku Import dat - uživatelé
+            await updateBilling(); // Pro záložku Vyúčtování
+            await loadSettings(); // Pro záložku Nastavení (deadline, heslo)
             
-            // Aktivujeme první záložku (Objednávky) po načtení dat
+            // Aktivujeme výchozí záložku (Objednávky) po načtení dat
             showAdminTab('orders'); 
         }
         
@@ -693,13 +700,13 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
 
         // --- Admin: Orders Tab ---
-        let allOrders = []; // Měníme na globální proměnnou pro snazší přístup
+        let allOrders = []; // Globální proměnná pro všechny objednávky v adminu
         async function loadOrders() {
             try {
                 // Načítáme všechny objednávky pro zobrazení
                 const snapshot = await db.collection('orders').orderBy('timestamp', 'desc').get();
-                allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                displayOrders(allOrders); // Zobrazíme všechny po načtení
+                allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })); // ID je zde dokument ID (e-mail uživatele)
+                filterOrders(); // Zobrazíme všechny po načtení (nebo filtrované, pokud je hledání aktivní)
             } catch (error) {
                 console.error("Chyba při načítání objednávek pro admina:", error);
                 alert('Chyba při načítání objednávek pro admina.');
@@ -712,7 +719,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             const filteredOrders = allOrders.filter(order =>
                 order.userName.toLowerCase().includes(searchTerm) ||
                 order.userEmail.toLowerCase().includes(searchTerm) ||
-                (order.status && order.status.toLowerCase().includes(searchTerm)) || // Hledání i podle statusu
+                (order.status && order.status.toLowerCase().includes(searchTerm)) ||
                 (order.paid !== undefined && (searchTerm === 'zaplaceno' && order.paid || searchTerm === 'nezaplaceno' && !order.paid))
             );
             displayOrders(filteredOrders);
@@ -770,11 +777,12 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         async function togglePaymentStatus(orderId, isPaid) {
             try {
                 await db.collection('orders').doc(orderId).update({ paid: isPaid });
-                showToast(`Objednávka ${orderId} označena jako ${isPaid ? 'zaplacená' : 'nezaplacená'}.`, 'success');
+                alert(`Objednávka ${orderId} označena jako ${isPaid ? 'zaplacená' : 'nezaplacená'}.`);
                 loadOrders(); // Znovu načíst objednávky pro aktualizaci zobrazení
+                updateBilling(); // Aktualizovat i záložku vyúčtování
             } catch (error) {
                 console.error("Chyba při změně statusu platby:", error);
-                showToast('Chyba při změně statusu platby.', 'error');
+                alert('Chyba při změně statusu platby: ' + error.message);
             }
         }
 
@@ -782,12 +790,12 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             if (confirm('Opravdu chcete smazat tuto objednávku? Tato akce je nevratná.')) {
                 try {
                     await db.collection('orders').doc(orderId).delete();
-                    showToast('Objednávka smazána!', 'success');
+                    alert('Objednávka smazána!');
                     loadOrders(); 
                     updateBilling(); // Aktualizovat i záložku vyúčtování
                 } catch (error) {
                     console.error("Chyba při mazání objednávky:", error);
-                    showToast('Chyba při mazání objednávky.', 'error');
+                    alert('Chyba při mazání objednávky: ' + error.message);
                 }
             }
         }
@@ -796,7 +804,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             const printWindow = window.open('', '', 'height=600,width=800');
             printWindow.document.write('<html><head><title>Tisk objednávek</title>');
             printWindow.document.write('<style>'+`
-                body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+                body { font-family: sans-serif; margin: 0; padding: 20px; }
                 table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
                 th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
                 th { background-color: #f2f2f2; }
@@ -881,12 +889,16 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
 
         async function exportOrdersToCSV() {
+            if (!allOrders || allOrders.length === 0) {
+                alert('Nejsou žádné objednávky k exportu.');
+                return;
+            }
+
             let csvContent = "data:text/csv;charset=utf-8,";
             csvContent += "Jméno,Email,Telefon,Datum Objednávky,Status Platby,Produkt ID,Název Produktu,Množství,Cena/ks,Celkem Položky,Celkem Objednávky\n";
 
             allOrders.forEach(order => {
                 let orderTotal = 0;
-                // Vypočítáme celkový součet objednávky jednou
                 for (const productId in order.items) {
                     const quantity = order.items[productId];
                     const product = products[productId];
@@ -894,7 +906,6 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     orderTotal += itemPrice * quantity;
                 }
 
-                // Nyní pro každou položku objednávky vytvoříme řádek
                 for (const productId in order.items) {
                     const quantity = order.items[productId];
                     const product = products[productId];
@@ -906,16 +917,16 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     const row = [
                         `"${order.userName}"`,
                         `"${order.userEmail}"`,
-                        `"${order.userPhone || 'Nezadáno'}"`, // Přidáno userPhone
+                        `"${order.userPhone || 'Nezadáno'}"`, 
                         `"${order.timestamp ? new Date(order.timestamp.toDate()).toLocaleString('cs-CZ') : 'N/A'}"`,
-                        `"${paymentStatus}"`, // Přidán status platby
-                        `"${productId}"`, // ID produktu
+                        `"${paymentStatus}"`, 
+                        `"${productId}"`, 
                         `"${productName}"`,
                         quantity,
                         itemPrice,
                         itemTotal,
-                        orderTotal // Celková cena objednávky se opakuje pro každý řádek položky
-                    ].map(item => String(item).replace(/"/g, '""')).join(','); // Ošetření uvozovek a join
+                        orderTotal 
+                    ].map(item => String(item).replace(/"/g, '""')).join(','); 
                     csvContent += row + "\n";
                 }
             });
@@ -931,20 +942,14 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
         
         // --- Admin: Products Tab ---
-        let allProductsAdmin = {}; // Měníme na objekt pro snazší přístup
-        async function displayProductsAdmin(page = 0) { // Přidáváme stránkování a filtrování jako dříve
+        // Produkty pro admin panel (s možností editace/mazání)
+        // Používáme globální 'products' objekt pro data
+        async function displayProductsAdmin(page = 0) { 
             const productsListDiv = document.getElementById('productsList');
-            productsListDiv.innerHTML = '<p class="text-gray-600">Načítám produkty...</p>';
+            productsListDiv.innerHTML = '<p class="text-gray-600 p-4">Načítám produkty...</p>';
 
             try {
-                // Načítáme produkty znovu, abychom měli aktuální data po importech
-                const snapshot = await db.collection('products').orderBy('name').get();
-                allProductsAdmin = {};
-                snapshot.forEach(doc => {
-                    allProductsAdmin[doc.id] = { id: doc.id, ...doc.data() };
-                });
-
-                const productArray = Object.values(allProductsAdmin);
+                const productArray = Object.values(products); // Používáme globální 'products' objekt
                 let html = '<div class="mb-4 flex justify-between items-center">' +
                            '<h4 class="font-semibold">Aktuální produkty:</h4>' +
                            '<input type="text" placeholder="Hledat produkt..." onkeyup="filterProductsAdmin(this.value)" class="px-3 py-1 border rounded">' +
@@ -956,8 +961,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     return;
                 }
 
-                // Implementace stránkování jako dříve
-                const productsPerPage = 20; // Nastavit počet produktů na stránku
+                const productsPerPage = 20; 
                 const totalPages = Math.ceil(productArray.length / productsPerPage);
                 const start = page * productsPerPage;
                 const end = start + productsPerPage;
@@ -985,7 +989,6 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 });
                 html += '</tbody></table></div>';
 
-                // Pagination controls
                 if (totalPages > 1) {
                     html += '<div class="mt-4 flex justify-center space-x-2">';
                     for (let i = 0; i < totalPages; i++) {
@@ -993,7 +996,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     }
                     html += '</div>';
                 }
-                html += `<p class="text-sm text-gray-600 mt-2">Zobrazeno ${pageProducts.length} z ${Object.keys(allProductsAdmin).length} produktů</p>`;
+                html += `<p class="text-sm text-gray-600 mt-2">Zobrazeno ${pageProducts.length} z ${Object.keys(products).length} produktů</p>`;
                 
                 productsListDiv.innerHTML = html;
 
@@ -1014,15 +1017,15 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
 
         async function editProduct(productId) {
-            const product = allProductsAdmin[productId];
+            const product = products[productId]; // Používáme globální 'products' objekt
             if (!product) return;
 
             const newName = prompt('Zadejte nový název produktu:', product.name);
-            if (newName === null || !newName.trim()) return; // Zrušeno nebo prázdné
+            if (newName === null || !newName.trim()) return;
 
             const newPriceStr = prompt('Zadejte novou cenu produktu:', product.price);
-            if (newPriceStr === null || !newPriceStr.trim()) return; // Zrušeno nebo prázdné
-            const newPrice = parseFloat(newPriceStr.replace(',', '.')); // Podpora čárky
+            if (newPriceStr === null || !newPriceStr.trim()) return;
+            const newPrice = parseFloat(newPriceStr.replace(',', '.')); 
 
             if (isNaN(newPrice) || newPrice < 0) {
                 alert('Neplatná cena.');
@@ -1034,12 +1037,12 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     name: newName.trim(),
                     price: newPrice
                 });
-                showToast('Produkt aktualizován!', 'success');
-                loadProducts(); // Znovu načíst produkty na hlavní obrazovce
+                alert('Produkt aktualizován!');
+                await loadProducts(); // Znovu načíst produkty na hlavní obrazovce a v globální proměnné
                 displayProductsAdmin(); // Znovu zobrazit v adminu
             } catch (error) {
                 console.error("Chyba při aktualizaci produktu:", error);
-                showToast('Chyba při aktualizaci produktu.', 'error');
+                alert('Chyba při aktualizaci produktu: ' + error.message);
             }
         }
 
@@ -1047,12 +1050,12 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             if (confirm('Opravdu chcete smazat tento produkt? Tato akce je nevratná.')) {
                 try {
                     await db.collection('products').doc(productId).delete();
-                    showToast('Produkt smazán!', 'success');
-                    loadProducts(); // Znovu načíst produkty na hlavní obrazovce
+                    alert('Produkt smazán!');
+                    await loadProducts(); // Znovu načíst produkty na hlavní obrazovce a v globální proměnné
                     displayProductsAdmin(); // Znovu zobrazit v adminu
                 } catch (error) {
                     console.error("Chyba při mazání produktu:", error);
-                    showToast('Chyba při mazání produktu.', 'error');
+                    alert('Chyba při mazání produktu: ' + error.message);
                 }
             }
         }
@@ -1080,13 +1083,12 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
                         const textContent = await page.getTextContent();
-                        // Spojení textu s mezerami, aby slova nebyla slepená
                         fullText += textContent.items.map(item => item.str).join(' ') + '\n'; 
                     }
                     
-                    await parsePDFTextForProducts(fullText); // Změna: await
+                    await parsePDFTextForProducts(fullText);
                     pdfStatusDiv.innerHTML = '<div class="text-green-600">✅ PDF zpracováno a data importována.</div>';
-                    await loadProducts(); // Znovu načíst produkty pro hlavní obrazovku
+                    await loadProducts(); // Znovu načíst produkty (aktualizuje globální 'products' a hlavní obrazovku)
                     displayProductsAdmin(); // Znovu zobrazit produkty v admin panelu
                 } catch (error) {
                     console.error('Chyba při zpracování PDF:', error);
@@ -1101,9 +1103,6 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             let importedCount = 0;
             let errorCount = 0;
 
-            // Regex pro ID (6 číslic), Název (cokoli), Cena (číslo s Kč)
-            // Příklad: "733005 Aloe Vera & Angrešt koncentrát 500ml 185 Kč"
-            // Použijeme zjednodušený, který bere vše mezi ID a cenou jako název
             const simplifiedProductRegex = /^(\d{6})\s(.+)\s(\d+)\s*Kč$/;
 
             let batch = db.batch();
@@ -1210,7 +1209,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 }
 
                 resultDiv.innerHTML = `<div class="text-green-600">✅ Import dokončen! Importováno: ${imported} uživatelů${errors > 0 ? `<br>⚠️ Chyby: ${errors}` : ''}</div>`;
-                await loadUsers(); // Znovu načíst uživatele pro admin panel
+                await loadUsers(); // Znovu načíst uživatele pro aktualizaci všech seznamů
             } catch (error) {
                 resultDiv.innerHTML = `<div class="text-red-600">❌ Chyba: ${error.message}</div>`;
             }
@@ -1292,75 +1291,9 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 }
 
                 resultDiv.innerHTML = `<div class="text-green-600">✅ Import dokončen! Importováno: ${imported} produktů${errors > 0 ? `<br>⚠️ Chyby: ${errors}` : ''}</div>`;
-                await loadProducts(); // Znovu načíst produkty pro admin panel
+                await loadProducts(); // Znovu načíst produkty (aktualizuje globální 'products' a admin seznam)
             } catch (error) {
                 resultDiv.innerHTML = `<div class="text-red-600">❌ Chyba: ${error.message}</div>`;
-            }
-        }
-        
-        // --- Admin: Users Tab (Admin Panel) ---
-        let allUsersAdmin = [];
-        async function loadUsersAdmin() {
-            try {
-                // Použijeme globální 'users' objekt, který je načten na začátku
-                allUsersAdmin = Object.values(users);
-                displayUsersAdmin(allUsersAdmin);
-            } catch (error) {
-                console.error("Chyba při načítání uživatelů pro admina:", error);
-            }
-        }
-
-        function filterUsersAdmin(query) { // Upraveno pro filtrování admin seznamu uživatelů
-            const searchTerm = query.toLowerCase();
-            const filtered = allUsersAdmin.filter(user =>
-                user.name.toLowerCase().includes(searchTerm) ||
-                user.email.toLowerCase().includes(searchTerm)
-            );
-            displayUsersAdmin(filtered);
-        }
-
-        function displayUsersAdmin(usersToDisplay) {
-            const usersListDiv = document.getElementById('usersList');
-            usersListDiv.innerHTML = '';
-            if (usersToDisplay.length === 0) {
-                usersListDiv.innerHTML = '<p class="text-gray-600 p-4">Žádní uživatelé k zobrazení.</p>';
-                return;
-            }
-
-            usersToDisplay.forEach(user => {
-                const userElement = document.createElement('div');
-                userElement.className = 'bg-white p-4 rounded-lg shadow-md mb-4 border border-gray-200';
-                userElement.innerHTML = `
-                    <h4 class="font-bold text-lg mb-2">${user.name}</h4>
-                    <p class="text-sm text-gray-500 mb-1">E-mail: ${user.email}</p>
-                    <div class="mt-2 flex justify-end space-x-2">
-                        <button onclick="deleteUser('${user.email}')" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">Smazat uživatele</button>
-                    </div>
-                `;
-                usersListDiv.appendChild(userElement);
-            });
-        }
-
-        async function deleteUser(userEmail) { // ID uživatele je zde jeho e-mail
-            if (confirm('Opravdu chcete smazat tohoto uživatele a jeho objednávky? Tato akce je nevratná.')) {
-                try {
-                    await db.collection('users').doc(userEmail).delete(); // Smažeme uživatele
-                    
-                    // Smažeme všechny objednávky tohoto uživatele
-                    const userOrdersSnapshot = await db.collection('orders').where('userId', '==', userEmail).get();
-                    const batch = db.batch();
-                    userOrdersSnapshot.forEach(doc => {
-                        batch.delete(doc.ref);
-                    });
-                    await batch.commit();
-
-                    alert('Uživatel a jeho objednávky smazány!');
-                    await loadUsers(); // Znovu načteme uživatele pro aktualizaci seznamu
-                    loadOrders(); // Znovu načíst objednávky pro aktualizaci seznamu (pokud je admin v záložce Objednávky)
-                } catch (error) {
-                    console.error("Chyba při mazání uživatele:", error);
-                    alert('Chyba při mazání uživatele: ' + error.message);
-                }
             }
         }
 
@@ -1372,11 +1305,13 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             try {
                 // Načítáme všechny aktivní objednávky
                 const ordersSnapshot = await db.collection('orders').where('status', '==', 'active').get();
-                const usersBillingData = {}; // Agregace dat pro vyúčtování dle uživatele
+                const usersBillingData = {}; // Agregace dat pro vyúčtování dle uživatele (klíč = e-mail)
 
                 ordersSnapshot.forEach(orderDoc => {
                     const order = orderDoc.data();
-                    const userId = order.userId; // ID uživatele je jeho e-mail
+                    // Zde je důležité, že ID dokumentu objednávky je e-mail uživatele
+                    // order.id je ID dokumentu, order.userId je pole v dokumentu (zde také e-mail)
+                    const userId = order.userId; 
 
                     if (!usersBillingData[userId]) {
                         usersBillingData[userId] = {
@@ -1397,13 +1332,14 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                         const user = usersBillingData[userId];
                         let userTotal = 0;
                         let userItemsHtml = '';
-                        let hasUnpaidOrder = false; // Nová proměnná pro stav platby uživatele
+                        let hasUnpaidOrder = false; // Pokud některá objednávka tohoto uživatele není zaplacená
 
                         user.orders.forEach(order => {
                             let orderCurrentTotal = 0;
                             let orderPaidStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
-                            if (!order.paid) hasUnpaidOrder = true; // Pokud je některá objednávka nezaplacená
-                            userItemsHtml += `<p class="font-semibold text-sm mt-2">Objednávka (status: ${orderPaidStatus}):</p><ul class="list-disc pl-5 text-sm">`;
+                            if (!order.paid) hasUnpaidOrder = true; 
+                            // ID dokumentu objednávky je order.id
+                            userItemsHtml += `<p class="font-semibold text-sm mt-2">Objednávka ID: ${order.id.substring(0,6)}... (status: ${orderPaidStatus}):</p><ul class="list-disc pl-5 text-sm">`;
 
                             Object.entries(order.items).forEach(([productId, quantity]) => {
                                 const product = products[productId];
@@ -1417,7 +1353,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                             userTotal += orderCurrentTotal;
                         });
 
-                        // Tlačítka pro zaplaceno/nezaplaceno u vyúčtování
+                        // Tlačítka pro zaplaceno/nezaplaceno u vyúčtování - pro KAŽDOU OBJEDNÁVKU
                         const markPaidUnpaidButtons = user.orders.map(order => {
                             const currentPaidStatus = order.paid;
                             const orderButtonText = currentPaidStatus ? 'Označit jako Nezaplaceno' : 'Označit jako Zaplaceno';
@@ -1437,8 +1373,8 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                                 <div class="mt-4 flex flex-wrap justify-end space-x-2 space-y-2">
                                     ${markPaidUnpaidButtons}
                                     <button onclick="showEmailPreview('${user.userEmail}')" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">Náhled emailu</button>
-                                    <button onclick="generatePaymentQR('${user.userEmail}', ${userTotal})" class="bg-purple-500 text-white px-3 py-1 rounded text-sm hover:bg-purple-600">QR Kód</button>
-                                    <button onclick="sendSingleBillingEmail('${user.userEmail}')" 
+                                    <button onclick="generatePaymentQR('${user.userEmail}', ${userTotal}, '${user.userName}')" class="bg-purple-500 text-white px-3 py-1 rounded text-sm hover:bg-purple-600">QR Kód</button>
+                                    <button onclick="sendSingleBillingEmailCloudFunction('${user.userEmail}', ${hasUnpaidOrder})" 
                                             class="bg-green-700 text-white px-3 py-1 rounded text-sm hover:bg-green-800 ${!hasUnpaidOrder ? 'opacity-50 cursor-not-allowed' : ''}"
                                             ${!hasUnpaidOrder ? 'disabled' : ''}>
                                         Odeslat e-mail s vyúčtováním ${hasUnpaidOrder ? '' : '(vše zaplaceno)'}
@@ -1456,146 +1392,165 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             }
         }
         
-        // Nová funkce: Označit jednotlivou objednávku jako zaplacenou/nezaplacenou
-        async function toggleSingleOrderPaymentStatus(orderId, isPaid) {
-            try {
-                await db.collection('orders').doc(orderId).update({ paid: isPaid });
-                showToast(`Objednávka ${orderId.substring(0,5)}... označena jako ${isPaid ? 'zaplacená' : 'nezaplacená'}.`, 'success');
-                updateBilling(); // Znovu načíst vyúčtování pro aktualizaci zobrazení
-                loadOrders(); // Znovu načíst i záložku Objednávky
-            } catch (error) {
-                console.error("Chyba při změně statusu platby jedné objednávky:", error);
-                showToast('Chyba při změně statusu platby.', 'error');
+        // Funkce pro odeslání jednoho e-mailu s vyúčtováním přes Cloud Function
+        async function sendSingleBillingEmailCloudFunction(userEmail, onlyUnpaid = false) {
+            if (!userEmail) {
+                alert('Chybí e-mail uživatele.');
+                return;
             }
-        }
-
-        // Generate QR code for payment
-        function generatePaymentQR(userId, amount) { // Upraveno pro ID uživatele (email)
-            // Normalizujeme userId pro ID kontejneru, aby neobsahoval speciální znaky jako '@' nebo '.'
-            const safeUserId = userId.replace(/[^a-zA-Z0-9]/g, '-'); 
-            const qrDiv = document.getElementById(`qrCodeContainer-${safeUserId}`);
-            qrDiv.innerHTML = ''; // Vyčistí předchozí QR kód
-
-            // České QR pravidlo pro platbu (ISO 20022), s pevným účtem a proměnnou částkou
-            // **DŮLEŽITÉ: NÍŽE JE POUZE PŘÍKLAD IBAN. ZÍSKEJTE SKUTEČNÝ IBAN PRO 219731465/0300 OD VAŠÍ BANKY (ČSOB)!**
-            const bankAccountIBAN = 'CZ6703000000000219731465'; 
-            const amountFormatted = amount.toFixed(2).replace('.', ','); 
-            
-            // Pro variabilní symbol použijeme hash e-mailu nebo jeho část
-            const variableSymbol = String(Math.abs(hashCode(userId))).substring(0, 10); // Jednoduchý hash emailu
-            
-            const paymentString = `SPD*1.0*ACC:${bankAccountIBAN}*AM:${amountFormatted}*CC:CZK*MSG:Objednavka ${user.name}*X-VS:${variableSymbol}`;
-            // Zde by bylo potřeba získat jméno uživatele, pro zjednodušení použijeme jen "Objednavka"
-            
-            new QRCode(qrDiv, {
-                text: paymentString,
-                width: 200,
-                height: 200
-            });
-            showToast('QR kód vygenerován!', 'info');
-        }
-
-        // Pomocná funkce pro jednoduchý hash (pro variabilní symbol)
-        function hashCode(s) {
-            let hash = 0;
-            for (let i = 0; i < s.length; i++) {
-                const char = s.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash |= 0; // Convert to 32bit integer
+            if (onlyUnpaid && !confirm(`Opravdu chcete odeslat upozornění na platbu jen nezaplaceným uživatelům?`)) {
+                return;
             }
-            return hash;
-        }
-
-        // --- Admin: Settings Tab ---
-        async function loadSettings() {
-            try {
-                const settingsDoc = await db.collection('settings').doc('appSettings').get();
-                if (settingsDoc.exists) {
-                    const data = settingsDoc.data();
-                    if (data.orderingDeadline) {
-                        orderingDeadline = data.orderingDeadline.toDate();
-                        document.getElementById('orderingDeadline').value = orderingDeadline.toISOString().slice(0, 16);
-                        document.getElementById('orderingStatus').innerHTML = `Aktuální termín: <span class="${new Date() > orderingDeadline ? 'text-red-600' : 'text-green-600'}">${orderingDeadline.toLocaleString('cs-CZ')}</span>`;
-                    } else {
-                        orderingDeadline = null;
-                        document.getElementById('orderingDeadline').value = '';
-                        document.getElementById('orderingStatus').innerHTML = '<span class="text-blue-600">Termín není nastaven (objednávky vždy povoleny).</span>';
-                    }
-                } else {
-                    orderingDeadline = null;
-                    document.getElementById('orderingDeadline').value = '';
-                    document.getElementById('orderingStatus').innerHTML = '<span class="text-blue-600">Termín není nastaven (objednávky vždy povoleny).</span>';
-                }
-            } catch (error) {
-                console.error("Chyba při načítání nastavení:", error);
-                document.getElementById('orderingStatus').innerHTML = '<span class="text-red-600">Chyba při načítání nastavení.</span>';
-            }
-        }
-
-        async function setOrderingDeadline() {
-            const deadlineInput = document.getElementById('orderingDeadline').value;
-            let newDeadline = null;
-
-            if (deadlineInput) {
-                newDeadline = new Date(deadlineInput);
-                if (isNaN(newDeadline.getTime())) {
-                    alert('Zadali jste neplatné datum a čas.');
-                    return;
-                }
-            } else {
-                if (!confirm('Opravdu chcete zrušit termín uzavření objednávek (objednávky budou vždy povoleny)?')) {
-                    return; // Uživatel zrušil akci
-                }
-            }
-
-            try {
-                await db.collection('settings').doc('appSettings').set({
-                    orderingDeadline: newDeadline ? firebase.firestore.Timestamp.fromDate(newDeadline) : null
-                }, { merge: true });
-                showToast('Termín uzavření objednávek uložen!', 'success');
-                loadSettings(); // Načíst nastavení pro aktualizaci zobrazení
-            } catch (error) {
-                console.error("Chyba při ukládání termínu objednávek:", error);
-                showToast('Chyba při ukládání termínu.', 'error');
-            }
-        }
-
-        function changeAdminPassword() {
-            const newPassword = document.getElementById('adminNewPassword').value;
-            const passwordChangeStatusDiv = document.getElementById('passwordChangeStatus');
-
-            if (!newPassword || newPassword.length < 4) {
-                passwordChangeStatusDiv.textContent = 'Heslo musí mít alespoň 4 znaky.';
-                passwordChangeStatusDiv.className = 'text-red-600';
+            if (!onlyUnpaid && !confirm(`Opravdu chcete odeslat vyúčtování e-mailem uživateli: ${userEmail}?`)) {
                 return;
             }
 
-            localStorage.setItem(ADMIN_PASSWORD_KEY, newPassword);
-            passwordChangeStatusDiv.textContent = 'Heslo úspěšně změněno!';
-            passwordChangeStatusDiv.className = 'text-green-600';
-            document.getElementById('adminNewPassword').value = ''; // Vyčistit pole
-            showToast('Admin heslo změněno!', 'success');
+            const sendEmailStatusDiv = document.getElementById('sendEmailStatus');
+            sendEmailStatusDiv.innerHTML = `<div class="text-blue-600">Odesílám e-mail uživateli ${userEmail}, prosím čekejte...</div>`;
+
+            try {
+                const sendBillingEmailCallable = functions.httpsCallable('sendBillingEmail');
+                const result = await sendBillingEmailCallable({ userId: userEmail, onlyUnpaid: onlyUnpaid });
+
+                if (result.data.success) {
+                    sendEmailStatusDiv.innerHTML = `<div class="text-green-600">✅ E-mail pro uživatele ${userEmail} úspěšně odeslán: ${result.data.message}</div>`;
+                    alert('E-mail odeslán!');
+                } else {
+                    sendEmailStatusDiv.innerHTML = `<div class="text-yellow-600">⚠️ E-mail pro uživatele ${userEmail} selhal: ${result.data.message}</div>`;
+                    alert('E-mail selhal: ' + result.data.message);
+                }
+            } catch (error) {
+                console.error(`Chyba při volání Cloud Function pro ${userEmail}:`, error);
+                sendEmailStatusDiv.innerHTML = `<div class="text-red-600">❌ Chyba při odesílání e-mailu pro ${userEmail}: ${error.message}</div>`;
+                alert('Chyba při odesílání e-mailu: ' + error.message);
+            }
         }
 
-        async function resetAllOrders() {
-            if (!confirm('Opravdu chcete archivovat všechny aktivní objednávky? Tato akce je nevratná.')) return;
-            
-            const batch = db.batch();
-            const snapshot = await db.collection('orders').where('status', '==', 'active').get();
-            
-            snapshot.forEach(doc => {
-                batch.update(doc.ref, { status: 'archived', archivedAt: firebase.firestore.FieldValue.serverTimestamp() });
-            });
-            
-            try {
-                await batch.commit();
-                alert('Všechny aktivní objednávky byly archivovány.');
-                loadOrders(); // Znovu načíst objednávky pro aktualizaci zobrazení
-                updateBilling(); // Aktualizovat i záložku vyúčtování
-            } catch (error) {
-                console.error("Chyba při archivaci objednávek:", error);
-                alert('Chyba při archivaci objednávek: ' + error.message);
+        // Funkce pro hromadné odeslání vyúčtování všem uživatelům s nezaplacenými objednávkami
+        async function sendAllBillingEmails() {
+            if (!confirm('Opravdu chcete odeslat upozornění na platbu všem uživatelům, kteří mají nezaplacené objednávky?')) {
+                return;
             }
+
+            const sendEmailStatusDiv = document.getElementById('sendEmailStatus');
+            sendEmailStatusDiv.innerHTML = '<div class="text-blue-600">Odesílám e-maily, prosím čekejte...</div>';
+
+            try {
+                const ordersSnapshot = await db.collection('orders').where('status', '==', 'active').where('paid', '==', false).get();
+                const usersWithUnpaidOrders = new Set();
+                ordersSnapshot.forEach(doc => {
+                    usersWithUnpaidOrders.add(doc.data().userId); 
+                });
+
+                if (usersWithUnpaidOrders.size === 0) {
+                    sendEmailStatusDiv.innerHTML = '<div class="text-yellow-600">⚠️ Žádné nezaplacené aktivní objednávky k odeslání.</div>';
+                    return;
+                }
+
+                let successfulSends = 0;
+                let failedSends = 0;
+                let messages = [];
+
+                const sendBillingEmailCallable = functions.httpsCallable('sendBillingEmail');
+
+                for (const userId of usersWithUnpaidOrders) {
+                    try {
+                        // Voláme Cloud Function s flagem onlyUnpaid=true
+                        const result = await sendBillingEmailCallable({ userId: userId, onlyUnpaid: true });
+                        if (result.data.success) {
+                            successfulSends++;
+                            messages.push(`✅ ${result.data.message}`);
+                        } else {
+                            failedSends++;
+                            messages.push(`⚠️ ${result.data.message}`);
+                        }
+                    } catch (error) {
+                        failedSends++;
+                        messages.push(`❌ Chyba při odesílání e-mailu pro ${userId}: ${error.message}`);
+                        console.error(`Chyba při volání Cloud Function pro ${userId}:`, error);
+                    }
+                }
+
+                sendEmailStatusDiv.innerHTML = `
+                    <div class="${failedSends > 0 ? 'text-red-600' : 'text-green-600'}">
+                        Dokončeno. Úspěšně odesláno: ${successfulSends}, Selhalo: ${failedSends}
+                        <div class="mt-2">${messages.join('<br>')}</div>
+                    </div>
+                `;
+                 alert(`Odesílání dokončeno. Úspěšně odesláno: ${successfulSends}, Selhalo: ${failedSends}`);
+
+            } catch (error) {
+                console.error("Chyba při spouštění hromadného odesílání e-mailů:", error);
+                sendEmailStatusDiv.innerHTML = `<div class="text-red-600">❌ Chyba při spouštění odesílání: ${error.message}</div>`;
+            }
+        }
+
+        // --- Email Preview for Billing ---
+        async function showEmailPreview(userEmail) { // Přijímá userEmail jako ID uživatele
+            const user = users[userEmail];
+            if (!user) {
+                alert('Uživatel nenalezen.');
+                return;
+            }
+
+            // Načteme všechny aktivní objednávky pro daného uživatele
+            const ordersSnapshot = await db.collection('orders')
+                .where('userId', '==', userEmail)
+                .where('status', '==', 'active')
+                .get();
+            
+            if (ordersSnapshot.empty) {
+                alert(`Pro uživatele ${user.name} (${userEmail}) nejsou žádné aktivní objednávky.`);
+                return;
+            }
+
+            let totalForUser = 0;
+            let itemsHtmlForEmail = '';
+            
+            // Produkty načteme jednou
+            const productsSnapshot = await db.collection('products').get();
+            const allProductsMap = {};
+            productsSnapshot.forEach(doc => { allProductsMap[doc.id] = doc.data(); });
+
+            ordersSnapshot.forEach(orderDoc => {
+                const order = orderDoc.data();
+                let orderCurrentTotal = 0;
+                let orderPaidStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
+                itemsHtmlForEmail += `<p style="font-weight: bold; font-size: 0.9em; margin-top: 10px;">Objednávka ID: ${orderDoc.id.substring(0,6)}... (status: ${orderPaidStatus}):</p><ul style="list-style-type: disc; margin-left: 20px;">`;
+
+                Object.entries(order.items).forEach(([productId, quantity]) => {
+                    const product = allProductsMap[productId];
+                    const productName = product ? product.name : `Neznámý produkt (ID: ${productId})`;
+                    const itemPrice = product ? product.price : 0;
+                    const itemTotal = itemPrice * quantity;
+                    orderCurrentTotal += itemTotal;
+                    itemsHtmlForEmail += `<li style="font-size: 0.8em;">${productName} x ${quantity} (${itemPrice} Kč/ks) = ${itemTotal} Kč</li>`;
+                });
+                itemsHtmlForEmail += `</ul><p style="font-weight: bold; font-size: 0.9em; text-align: right;">Celkem objednávka: ${orderCurrentTotal} Kč</p>`;
+                totalForUser += orderCurrentTotal;
+            });
+
+
+            const bankAccountIBAN = 'CZ6703000000000219731465'; // Používáme pevný IBAN z Cloud Function
+            const accountNumberFormatted = '219731465/0300'; // Pro zobrazení v textu
+
+            const emailContent = `
+                <p>Ahoj,</p>
+                <p>zde je shrnutí tvých aktivních objednávek k úhradě:</p>
+                <div style="margin-top: 15px; margin-bottom: 20px; border: 1px solid #ddd; padding: 10px;">
+                    ${itemsHtmlForEmail}
+                </div>
+                <p style="font-weight: bold; font-size: 1.1em; text-align: right;">Celkem k úhradě: ${totalForUser} Kč</p>
+                <p>Pro platbu prosím použij bankovní převod na účet: <strong>${accountNumberFormatted}</strong> (IBAN: ${bankAccountIBAN}) ve výši <strong>${totalForUser} Kč</strong>.</p>
+                <p style="margin-top: 20px;">Děkujeme za objednávku!</p>
+                <p>S pozdravem,<br>Lukáš Vladyka</p>
+            `;
+
+            const previewWindow = window.open('', '_blank', 'width=700,height=800,scrollbars=yes');
+            previewWindow.document.write('<html><head><title>Náhled e-mailu pro ' + user.name + '</title></head><body>');
+            previewWindow.document.write(emailContent);
+            previewWindow.document.write('</body></html>');
+            previewWindow.document.close();
         }
 
         // --- Utility Functions ---
