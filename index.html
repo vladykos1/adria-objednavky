@@ -151,9 +151,6 @@
                             <button onclick="exportOrdersToCSV()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                                 Export CSV pro eshop
                             </button>
-                            <button onclick="exportEmails()" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">
-                                Zkopírovat emaily
-                            </button>
                              <button onclick="printOrders()" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">
                                 Tisk přehledu
                             </button>
@@ -379,38 +376,33 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         // Funkce pro zobrazení objednávek (používá se i pro filtrované)
         function displayOrders(ordersToDisplay) {
             const ordersListDiv = document.getElementById('ordersList');
-            ordersListDiv.innerHTML = ''; // Vyčistíme starý obsah
-
+            ordersListDiv.innerHTML = '';
             if (ordersToDisplay.length === 0) {
                 ordersListDiv.innerHTML = '<p class="text-gray-600 p-4">Žádné objednávky k zobrazení.</p>';
                 return;
             }
-
             ordersToDisplay.forEach(order => {
                 let itemsHtml = '';
                 let orderTotal = 0;
                 for (const productId in order.items) {
                     const quantity = order.items[productId];
-                    const product = products[productId]; // Produkty už jsou načteny v globální proměnné
+                    const product = products[productId];
                     const productName = product ? product.name : `Neznámý produkt (ID: ${productId})`;
                     const itemPrice = product ? product.price : 0;
                     const itemTotal = itemPrice * quantity;
                     orderTotal += itemTotal;
                     itemsHtml += `<li class="text-sm">${productName} x ${quantity} (${itemPrice} Kč/ks) = ${itemTotal} Kč</li>`;
                 }
-
-                // Stav platby
+                // OPRAVA: nikdy undefined u jména
+                const displayName = order.userName || users[order.userEmail]?.name || users[order.userId]?.name || order.userEmail || order.userId || 'Neznámý uživatel';
                 const paymentStatus = order.paid ? '<span class="text-green-600 font-bold">Zaplaceno</span>' : '<span class="text-red-600 font-bold">Nezaplaceno</span>';
                 const markPaidButton = order.paid 
                     ? `<button onclick="togglePaymentStatus('${order.id}', false)" class="bg-yellow-500 text-white px-3 py-1 rounded text-sm hover:bg-yellow-600">Označit jako Nezaplaceno</button>`
                     : `<button onclick="togglePaymentStatus('${order.id}', true)" class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600">Označit jako Zaplaceno</button>`;
-
-
                 const orderElement = document.createElement('div');
                 orderElement.className = 'bg-white p-4 rounded-lg shadow-md mb-4 border border-gray-200';
                 orderElement.innerHTML = `
-                    <h4 class="font-bold text-lg mb-2">${order.userName} (${order.userEmail})</h4>
-                    <p class="text-sm text-gray-500 mb-2">Telefon: ${order.userPhone || 'Nezadáno'}</p>
+                    <h4 class="font-bold text-lg mb-2">${displayName} (${order.userEmail})</h4>
                     <p class="text-sm text-gray-500 mb-2">Datum: ${order.timestamp ? new Date(order.timestamp.toDate()).toLocaleString('cs-CZ') : 'N/A'}</p>
                     <p class="font-semibold mb-2">Položky:</p>
                     <ul class="list-disc pl-5 mb-2">${itemsHtml}</ul>
@@ -504,8 +496,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
                 printWindow.document.write(`
                     <div class="order-section">
-                        <h3 style="margin-bottom: 5px;">Objednávka pro: ${order.userName} (${order.userEmail})</h3>
-                        <p style="font-size: 0.9em; margin-bottom: 5px;">Telefon: ${order.userPhone || 'Nezadáno'}</p>
+                        <h3 style="margin-bottom: 5px;">Objednávka pro: ${order.userName || users[order.userEmail]?.name || users[order.userId]?.name || 'Neznámý uživatel'} (${order.userEmail})</h3>
                         <p style="font-size: 0.9em; margin-bottom: 10px;">Datum: ${order.timestamp ? new Date(order.timestamp.toDate()).toLocaleString('cs-CZ') : 'N/A'}</p>
                         <table>
                             <thead>
@@ -567,7 +558,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     const paymentStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
 
                     const row = [
-                        `"${order.userName}"`,
+                        `"${order.userName || users[order.userEmail]?.name || users[order.userId]?.name || 'Neznámý uživatel'}""`,
                         `"${order.userEmail}"`,
                         `"${order.userPhone || 'Nezadáno'}"`, 
                         `"${order.timestamp ? new Date(order.timestamp.toDate()).toLocaleString('cs-CZ') : 'N/A'}"`,
@@ -943,45 +934,40 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             billingListDiv.innerHTML = '<p class="text-gray-600 p-4">Načítám data pro vyúčtování...</p>';
 
             try {
-                // Načítáme všechny aktivní objednávky
+                // Načti všechny aktivní objednávky
                 const ordersSnapshot = await db.collection('orders').where('status', '==', 'active').get();
-                const usersBillingData = {}; // Agregace dat pro vyúčtování dle uživatele (klíč = e-mail)
-
+                // Seskup podle uživatele (použijeme email jako klíč)
+                const usersBillingData = {};
                 ordersSnapshot.forEach(orderDoc => {
                     const order = orderDoc.data();
-                    const userId = order.userId;
-                    const userObj = users[userId];
-                    const userName = userObj ? userObj.name : (order.userName || 'Neznámý uživatel');
-                    const userEmail = userObj ? userObj.email : (order.userEmail || userId);
-
-                    if (!usersBillingData[userId]) {
-                        usersBillingData[userId] = {
+                    // Klíčujeme podle emailu, pokud není, použijeme userId
+                    const userKey = order.userEmail || order.userId;
+                    // Robustní získání jména
+                    const userName = order.userName || users[order.userEmail]?.name || users[order.userId]?.name || order.userEmail || order.userId || 'Neznámý uživatel';
+                    const userEmail = order.userEmail || order.userId;
+                    if (!usersBillingData[userKey]) {
+                        usersBillingData[userKey] = {
                             userName: userName,
                             userEmail: userEmail,
                             totalAmount: 0,
                             orders: []
                         };
                     }
-                    usersBillingData[userId].orders.push(order);
+                    usersBillingData[userKey].orders.push({ ...order, id: orderDoc.id });
                 });
-
                 let html = '';
                 if (Object.keys(usersBillingData).length === 0) {
                     html = '<p class="text-gray-600 p-4">Žádní uživatelé s aktivními objednávkami k vyúčtování.</p>';
                 } else {
-                    for (const userId in usersBillingData) {
-                        const user = usersBillingData[userId];
+                    for (const userKey in usersBillingData) {
+                        const user = usersBillingData[userKey];
                         let userTotal = 0;
                         let userItemsHtml = '';
-                        let hasUnpaidOrder = false; // Pokud některá objednávka tohoto uživatele není zaplacená
-
+                        let hasUnpaidOrder = false;
                         user.orders.forEach(order => {
                             let orderCurrentTotal = 0;
-                            let orderPaidStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
-                            if (!order.paid) hasUnpaidOrder = true; 
-                            // ID dokumentu objednávky je order.id
-                            userItemsHtml += `<p class="font-semibold text-sm mt-2">Objednávka ID: ${order.id.substring(0,6)}... (status: ${orderPaidStatus}):</p><ul class="list-disc pl-5 text-sm">`;
-
+                            if (!order.paid) hasUnpaidOrder = true;
+                            userItemsHtml += `<ul class="list-disc pl-5 text-sm">`;
                             Object.entries(order.items).forEach(([productId, quantity]) => {
                                 const product = products[productId];
                                 const productName = product ? product.name : `Neznámý produkt (ID: ${productId})`;
@@ -990,21 +976,19 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                                 orderCurrentTotal += itemTotal;
                                 userItemsHtml += `<li>${productName} x ${quantity} (${itemPrice} Kč/ks) = ${itemTotal} Kč</li>`;
                             });
-                            userItemsHtml += `</ul><p class="font-bold text-sm text-right">Celkem objednávka: ${orderCurrentTotal} Kč</p>`;
+                            userItemsHtml += `</ul>`;
                             userTotal += orderCurrentTotal;
                         });
-
-                        // Tlačítka pro zaplaceno/nezaplaceno u vyúčtování - pro KAŽDOU OBJEDNÁVKU
                         const markPaidUnpaidButtons = user.orders.map(order => {
                             const currentPaidStatus = order.paid;
+                            const orderIdShort = (order.id && typeof order.id === 'string') ? order.id.substring(0,5) : '';
                             const orderButtonText = currentPaidStatus ? 'Označit jako Nezaplaceno' : 'Označit jako Zaplaceno';
                             const orderButtonClass = currentPaidStatus ? 'bg-yellow-500' : 'bg-green-500';
                             return `<button onclick="toggleSingleOrderPaymentStatus('${order.id}', ${!currentPaidStatus})" 
                                         class="${orderButtonClass} text-white px-3 py-1 rounded text-xs hover:opacity-80 ml-1 mt-1">
-                                        ${orderButtonText} (ID: ${order.id.substring(0,5)}...)
+                                        ${orderButtonText} (ID: ${orderIdShort}...)
                                     </button>`;
                         }).join('');
-
                         html += `
                             <div class="bg-white p-4 rounded-lg shadow-md mb-4 border border-gray-200">
                                 <h4 class="font-bold text-lg mb-2">${user.userName} (${user.userEmail})</h4>
@@ -1021,7 +1005,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                                         Odeslat e-mail s vyúčtováním ${hasUnpaidOrder ? '' : '(vše zaplaceno)'}
                                     </button>
                                 </div>
-                                <div id="qrCodeContainer-${userId.replace(/[^a-zA-Z0-9]/g, '-')}" class="mt-4 flex justify-center"></div>
+                                <div id="qrCodeContainer-${userKey.replace(/[^a-zA-Z0-9]/g, '-')}" class="mt-4 flex justify-center"></div>
                             </div>
                         `;
                     }
@@ -1062,8 +1046,8 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 }
             } catch (error) {
                 console.error(`Chyba při volání Cloud Function pro ${userEmail}:`, error);
-                sendEmailStatusDiv.innerHTML = `<div class="text-red-600">❌ Chyba při odesílání e-mailu pro ${userEmail}: ${error.message}</div>`;
-                alert('Chyba při odesílání e-mailu: ' + error.message);
+                sendEmailStatusDiv.innerHTML = `<div class="text-red-600">❌ Chyba při odesílání e-mailu pro ${userEmail}: ${error.message || error}</div>`;
+                alert('Chyba při odesílání e-mailu: ' + (error.message || error));
             }
         }
 
@@ -1134,48 +1118,36 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 alert('Uživatel nenalezen.');
                 return;
             }
-
             // Načteme všechny aktivní objednávky pro daného uživatele
             const ordersSnapshot = await db.collection('orders')
                 .where('userId', '==', userEmail)
                 .where('status', '==', 'active')
                 .get();
-            
             if (ordersSnapshot.empty) {
                 alert(`Pro uživatele ${userName} (${userEmail}) nejsou žádné aktivní objednávky.`);
                 return;
             }
-
             let totalForUser = 0;
             let itemsHtmlForEmail = '';
-            
-            // Produkty načteme jednou
             const productsSnapshot = await db.collection('products').get();
             const allProductsMap = {};
             productsSnapshot.forEach(doc => { allProductsMap[doc.id] = doc.data(); });
-
             ordersSnapshot.forEach(orderDoc => {
                 const order = orderDoc.data();
                 let orderCurrentTotal = 0;
                 let orderPaidStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
-                itemsHtmlForEmail += `<p style="font-weight: bold; font-size: 0.9em; margin-top: 10px;">Objednávka ID: ${orderDoc.id.substring(0,6)}... (status: ${orderPaidStatus}):</p><ul style="list-style-type: disc; margin-left: 20px;">`;
-
+                itemsHtmlForEmail += `<div style="margin-bottom:10px;"><b>Tvoje objednávka</b> (${orderPaidStatus}):<ul style="list-style-type: disc; margin-left: 20px;">`;
                 Object.entries(order.items).forEach(([productId, quantity]) => {
                     const product = allProductsMap[productId];
                     const productName = product ? product.name : `Neznámý produkt (ID: ${productId})`;
                     const itemPrice = product ? product.price : 0;
                     const itemTotal = itemPrice * quantity;
                     orderCurrentTotal += itemTotal;
-                    itemsHtmlForEmail += `<li style="font-size: 0.8em;">${productName} x ${quantity} (${itemPrice} Kč/ks) = ${itemTotal} Kč</li>`;
+                    itemsHtmlForEmail += `<li style="font-size: 0.95em;">${productName} x ${quantity} (${itemPrice} Kč/ks) = ${itemTotal} Kč</li>`;
                 });
-                itemsHtmlForEmail += `</ul><p style="font-weight: bold; font-size: 0.9em; text-align: right;">Celkem objednávka: ${orderCurrentTotal} Kč</p>`;
+                itemsHtmlForEmail += `</ul><div style="font-weight: bold; text-align: right;">Celkem objednávka: ${orderCurrentTotal} Kč</div></div>`;
                 totalForUser += orderCurrentTotal;
             });
-
-
-            const bankAccountIBAN = 'CZ6703000000000219731465'; // Používáme pevný IBAN z Cloud Function
-            const accountNumberFormatted = '219731465/0300'; // Pro zobrazení v textu
-
             const emailContent = `
                 <p>Ahoj,</p>
                 <p>zde je shrnutí tvých aktivních objednávek k úhradě:</p>
@@ -1183,11 +1155,10 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     ${itemsHtmlForEmail}
                 </div>
                 <p style="font-weight: bold; font-size: 1.1em; text-align: right;">Celkem k úhradě: ${totalForUser} Kč</p>
-                <p>Pro platbu prosím použij bankovní převod na účet: <strong>${accountNumberFormatted}</strong> (IBAN: ${bankAccountIBAN}) ve výši <strong>${totalForUser} Kč</strong>.</p>
+                <p>Pro platbu prosím použij bankovní převod na účet: <strong>219731465/0300</strong> ve výši <strong>${totalForUser} Kč</strong>.</p>
                 <p style="margin-top: 20px;">Děkujeme za objednávku!</p>
                 <p>S pozdravem,<br>Lukáš Vladyka</p>
             `;
-
             const previewWindow = window.open('', '_blank', 'width=700,height=800,scrollbars=yes');
             previewWindow.document.write('<html><head><title>Náhled e-mailu pro ' + userName + '</title></head><body>');
             previewWindow.document.write(emailContent);
@@ -1223,20 +1194,43 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- Firebase a Data Loading ---
         async function loadUsers() {
-            const snapshot = await db.collection('users').get();
-            users = {};
-            snapshot.forEach(doc => {
-                users[doc.id] = { id: doc.id, ...doc.data() };
-            });
+            try {
+                const snapshot = await db.collection('users').get();
+                users = {};
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    if (data && data.name) {
+                        users[doc.id] = { id: doc.id, ...data };
+                    } else {
+                        console.warn('Uživatel bez jména nebo dat:', doc.id, data);
+                    }
+                });
+                if (document.getElementById('userSearch').value.length > 0) {
+                    searchUsers();
+                }
+            } catch (e) {
+                console.error('Chyba při načítání uživatelů:', e);
+            }
         }
+        window.loadUsers = loadUsers;
 
         async function loadProducts() {
-            const snapshot = await db.collection('products').get();
-            products = {};
-            snapshot.forEach(doc => {
-                products[doc.id] = { id: doc.id, ...doc.data() };
-            });
+            try {
+                const snapshot = await db.collection('products').get();
+                products = {};
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    if (data && data.name) {
+                        products[doc.id] = { id: doc.id, ...data };
+                    } else {
+                        console.warn('Produkt bez jména nebo dat:', doc.id, data);
+                    }
+                });
+            } catch (e) {
+                console.error('Chyba při načítání produktů:', e);
+            }
         }
+        window.loadProducts = loadProducts;
 
         // --- User Selection (Main Screen) ---
         function searchUsers() {
@@ -1247,7 +1241,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 return;
             }
             const results = Object.entries(users).filter(([email, user]) => 
-                user.name.toLowerCase().includes(query)
+                user.name && user.name.toLowerCase().includes(query)
             ).slice(0, 10);
             if (results.length === 0) {
                 resultsDiv.innerHTML = `
@@ -1268,6 +1262,238 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             `).join('');
             resultsDiv.classList.remove('hidden');
         }
+
+        // --- Přidání nového uživatele z hlavní obrazovky ---
+        async function addNewUser(query) {
+            const name = prompt('Zadejte jméno nového uživatele:', query.charAt(0).toUpperCase() + query.slice(1));
+            if (!name || name.length < 2) {
+                alert('Neplatné jméno.');
+                return;
+            }
+            const email = prompt('Zadejte e-mail nového uživatele:');
+            if (!email || !email.includes('@')) {
+                alert('Neplatný e-mail.');
+                return;
+            }
+            try {
+                await db.collection('users').doc(email).set({
+                    name: name,
+                    email: email
+                });
+                await loadUsers();
+                alert('Uživatel přidán!');
+                document.getElementById('userSearch').value = name;
+                searchUsers();
+            } catch (err) {
+                alert('Chyba při přidávání uživatele: ' + err.message);
+            }
+        }
+        window.addNewUser = addNewUser;
+
+        // --- Nastavení termínu objednávek ---
+        async function setOrderingDeadline() {
+            const deadlineInput = document.getElementById('orderingDeadline');
+            const value = deadlineInput.value;
+            if (!value) {
+                alert('Zadejte termín.');
+                return;
+            }
+            try {
+                await db.collection('settings').doc('ordering').set({ deadline: value });
+                alert('Termín uložen!');
+            } catch (err) {
+                alert('Chyba při ukládání termínu: ' + err.message);
+            }
+        }
+        window.setOrderingDeadline = setOrderingDeadline;
+
+        // --- QR generátor ---
+        function generatePaymentQR(userEmail, amount, userName) {
+            // IBAN a další údaje pouze pro QR, ne do mailu
+            const iban = 'CZ6703000000000219731465';
+            const account = '219731465/0300';
+            const message = encodeURIComponent(`Platba objednávky pro ${userName}`);
+            const qrData = `SPD*1.0*ACC:${iban}*AM:${amount}*CC:CZK*MSG:${message}`;
+            const qrContainerId = `qrCodeContainer-${userEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+            const qrContainer = document.getElementById(qrContainerId);
+            qrContainer.innerHTML = '';
+            new QRCode(qrContainer, {
+                text: qrData,
+                width: 180,
+                height: 180
+            });
+        }
+        window.generatePaymentQR = generatePaymentQR;
+
+        // --- Oprava funkce změny hesla ---
+        async function changeAdminPassword() {
+            const newPassword = document.getElementById('adminNewPassword').value;
+            if (!newPassword || newPassword.length < 4) {
+                alert('Zadejte nové heslo (alespoň 4 znaky).');
+                return;
+            }
+            localStorage.setItem(ADMIN_PASSWORD_KEY, newPassword);
+            document.getElementById('adminNewPassword').value = '';
+            document.getElementById('passwordChangeStatus').innerText = 'Heslo změněno!';
+        }
+        window.changeAdminPassword = changeAdminPassword;
+
+        // --- Zajistím načtení uživatelů a produktů hned po načtení stránky ---
+        document.addEventListener('DOMContentLoaded', () => {
+            loadUsers();
+            loadProducts(); // přidáno, aby produkty byly vždy dostupné
+        });
+
+        // --- Opravím, aby selectUser byla dostupná v globálním scope ---
+        function selectUser(email) {
+            // Původní logika výběru uživatele
+            const user = users[email];
+            if (!user) {
+                alert('Uživatel nenalezen.');
+                return;
+            }
+            currentUser = user;
+            document.getElementById('selectedUserName').innerText = user.name;
+            document.getElementById('selectedUser').classList.remove('hidden');
+            document.getElementById('userSearchResults').classList.add('hidden');
+            document.getElementById('userSearch').value = user.name;
+            document.getElementById('productSection').classList.remove('hidden');
+            document.getElementById('orderSection').classList.remove('hidden');
+            renderCurrentUserOrder(); // přidáno
+        }
+        window.selectUser = selectUser;
+
+        // --- searchProducts pro vyhledávání produktů (a zpřístupnění v globálním scope) ---
+        function searchProducts() {
+            const query = document.getElementById('productSearch').value.toLowerCase();
+            const resultsDiv = document.getElementById('productSearchResults');
+            if (query.length < 2) {
+                resultsDiv.classList.add('hidden');
+                return;
+            }
+            const results = Object.values(products).filter(product =>
+                product.name.toLowerCase().includes(query) ||
+                (product.id && product.id.toLowerCase().includes(query))
+            ).slice(0, 10);
+            if (results.length === 0) {
+                resultsDiv.innerHTML = `<div class="p-4 text-center"><p class="text-gray-600 mb-2">Produkt nenalezen</p></div>`;
+                resultsDiv.classList.remove('hidden');
+                return;
+            }
+            resultsDiv.innerHTML = results.map(product => `
+                <div onclick="selectProduct('${product.id}')" class="p-3 hover:bg-gray-100 cursor-pointer border-b">
+                    <div class="font-semibold">${product.name} (${product.id})</div>
+                    <div class="text-sm text-gray-500">${product.price} Kč</div>
+                </div>
+            `).join('');
+            resultsDiv.classList.remove('hidden');
+        }
+        window.searchProducts = searchProducts;
+
+        // --- selectProduct pro výběr produktu (zpřístupnění v globálním scope) ---
+        function selectProduct(productId) {
+            const product = products[productId];
+            if (!product) return;
+            document.getElementById('selectedProductName').innerText = product.name;
+            document.getElementById('selectedProductId').value = product.id;
+            document.getElementById('manualProductAdd').classList.remove('hidden');
+        }
+        window.selectProduct = selectProduct;
+
+        // --- Přidání produktu do objednávky (zpřístupnění v globálním scope) ---
+        function addProductToOrderManual() {
+            if (!currentUser) {
+                alert('Nejprve vyberte uživatele.');
+                return;
+            }
+            const productId = document.getElementById('selectedProductId').value;
+            const quantity = parseInt(document.getElementById('productQuantityInput').value);
+            if (!productId || !products[productId]) {
+                alert('Vyberte platný produkt.');
+                return;
+            }
+            if (!quantity || quantity < 1) {
+                alert('Zadejte platné množství.');
+                return;
+            }
+            db.collection('orders')
+              .where('userId', '==', currentUser.id || currentUser.email)
+              .where('status', '==', 'active')
+              .limit(1)
+              .get()
+              .then(snapshot => {
+                if (!snapshot.empty) {
+                  const orderRef = snapshot.docs[0].ref;
+                  const orderData = snapshot.docs[0].data();
+                  orderData.items = orderData.items || {};
+                  orderData.items[productId] = quantity;
+                  let total = 0;
+                  Object.entries(orderData.items).forEach(([pid, qty]) => {
+                    const prod = products[pid];
+                    if (prod) total += prod.price * qty;
+                  });
+                  orderData.totalPrice = total;
+                  return orderRef.update({ items: orderData.items, totalPrice: total });
+                } else {
+                  const items = {};
+                  items[productId] = quantity;
+                  let total = products[productId].price * quantity;
+                  return db.collection('orders').add({
+                    userId: currentUser.id || currentUser.email,
+                    userName: currentUser.name,
+                    userEmail: currentUser.email,
+                    items: items,
+                    totalPrice: total,
+                    paid: false,
+                    status: 'active',
+                    timestamp: new Date()
+                  });
+                }
+              })
+              .then(() => {
+                alert('Produkt přidán/aktualizován v objednávce!');
+                loadOrders && loadOrders();
+                updateBilling && updateBilling();
+                renderCurrentUserOrder(); // přidáno
+              })
+              .catch(err => {
+                alert('Chyba při přidávání produktu do objednávky: ' + err.message);
+              });
+        }
+        window.addProductToOrderManual = addProductToOrderManual;
+
+        // --- Zobrazení aktivní objednávky aktuálního uživatele na hlavní stránce ---
+        async function renderCurrentUserOrder() {
+            if (!currentUser) {
+                document.getElementById('orderItems').innerHTML = '';
+                document.getElementById('totalPrice').innerText = '0 Kč';
+                return;
+            }
+            // Najdi aktivní objednávku pro aktuálního uživatele
+            const snapshot = await db.collection('orders')
+                .where('userId', '==', currentUser.id || currentUser.email)
+                .where('status', '==', 'active')
+                .limit(1)
+                .get();
+            if (snapshot.empty) {
+                document.getElementById('orderItems').innerHTML = '';
+                document.getElementById('totalPrice').innerText = '0 Kč';
+                return;
+            }
+            const order = snapshot.docs[0].data();
+            let html = '';
+            let total = 0;
+            Object.entries(order.items).forEach(([productId, quantity]) => {
+                const product = products[productId];
+                if (!product) return;
+                const itemTotal = product.price * quantity;
+                total += itemTotal;
+                html += `<tr><td class='p-2'>${product.name}</td><td class='text-center p-2'>${quantity}</td><td class='text-right p-2'>${product.price} Kč</td><td class='text-right p-2'>${itemTotal} Kč</td><td></td></tr>`;
+            });
+            document.getElementById('orderItems').innerHTML = html;
+            document.getElementById('totalPrice').innerText = total + ' Kč';
+        }
+        window.renderCurrentUserOrder = renderCurrentUserOrder;
     </script>
 </body>
 </html>
