@@ -346,6 +346,11 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 button.classList.remove('border-b-2', 'border-blue-600');
             });
             document.querySelector(`.admin-tab[onclick="showAdminTab('${tabId}')"]`).classList.add('border-b-2', 'border-blue-600');
+
+            // --- DOPLNĚNO: při přepnutí na vyúčtování vždy aktualizuj obsah ---
+            if (tabId === 'billing' && typeof updateBilling === 'function') {
+                updateBilling();
+            }
         }
 
 
@@ -540,75 +545,73 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 return;
             }
 
-            let csvContent = "data:text/csv;charset=utf-8,";
-            csvContent += "Jméno,Email,Telefon,Datum Objednávky,Status Platby,Produkt ID,Název Produktu,Množství,Cena/ks,Celkem Položky,Celkem Objednávky\n";
-
+            // Souhrn produktů napříč všemi objednávkami
+            const productSummary = {};
             allOrders.forEach(order => {
-                let orderTotal = 0;
                 for (const productId in order.items) {
                     const quantity = order.items[productId];
-                    const product = products[productId];
-                    const itemPrice = product ? product.price : 0;
-                    orderTotal += itemPrice * quantity;
-                }
-
-                for (const productId in order.items) {
-                    const quantity = order.items[productId];
-                    const product = products[productId];
-                    const productName = product ? product.name : `Neznámý produkt (ID: ${productId})`;
-                    const itemPrice = product ? product.price : 0;
-                    const itemTotal = itemPrice * quantity;
-                    const paymentStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
-
-                    const row = [
-                        `"${order.userName || users[order.userEmail]?.name || users[order.userId]?.name || 'Neznámý uživatel'}""`,
-                        `"${order.userEmail}"`,
-                        `"${order.userPhone || 'Nezadáno'}"`, 
-                        `"${order.timestamp ? new Date(order.timestamp.toDate()).toLocaleString('cs-CZ') : 'N/A'}"`,
-                        `"${paymentStatus}"`, 
-                        `"${productId}"`, 
-                        `"${productName}"`,
-                        quantity,
-                        itemPrice,
-                        itemTotal,
-                        orderTotal 
-                    ].map(item => String(item).replace(/"/g, '""')).join(','); 
-                    csvContent += row + "\n";
+                    if (!productSummary[productId]) productSummary[productId] = 0;
+                    productSummary[productId] += quantity;
                 }
             });
 
-            const encodedUri = encodeURI(csvContent);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", `objednavky_export_${new Date().toISOString().slice(0,10)}.csv`);
+            let csvContent = 'Produkt ID;Množství\n';
+            Object.entries(productSummary).forEach(([productId, totalQuantity]) => {
+                csvContent += `${productId};${totalQuantity}\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', `objednavky_souhrn_${new Date().toISOString().slice(0,10)}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            alert('Objednávky exportovány do CSV!');
+            URL.revokeObjectURL(url);
+            alert('Souhrnný export produktů do CSV byl vytvořen!');
         }
         
         // --- Admin: Products Tab ---
         // Produkty pro admin panel (s možností editace/mazání)
         // Používáme globální 'products' objekt pro data
-        async function displayProductsAdmin(page = 0) {
-            await loadProducts();
+        async function displayProductsAdmin(page = 0, filter = '') {
+            // await loadProducts(); // odstraněno, produkty se načítají pouze při vstupu do adminu nebo po importu/úpravě
             const productsListDiv = document.getElementById('productsList');
             productsListDiv.innerHTML = '<p class="text-gray-600 p-4">Načítám produkty...</p>';
             const productArray = Object.values(products);
             let html = '<div class="mb-4 flex justify-between items-center">' +
                        '<h4 class="font-semibold">Aktuální produkty:</h4>' +
-                       '<input type="text" placeholder="Hledat produkt..." onkeyup="filterProductsAdmin(this.value)" class="px-3 py-1 border rounded">' +
+                       '<input type="text" placeholder="Hledat produkt..." onkeyup="filterProductsAdmin(this.value)" class="px-3 py-1 border rounded" id="adminProductSearchInput">' +
                        '</div>';
-            if (productArray.length === 0) {
+
+            let filteredProducts = productArray;
+            if (filter && filter.trim().length > 0) {
+                const lowerQuery = filter.toLowerCase();
+                filteredProducts = productArray.filter(product =>
+                    product.name.toLowerCase().includes(lowerQuery) ||
+                    (product.id && product.id.toLowerCase().includes(lowerQuery))
+                );
+            }
+
+            if (filteredProducts.length === 0) {
                 html += '<p class="text-gray-600 p-4">Žádné produkty k zobrazení.</p>';
                 productsListDiv.innerHTML = html;
                 return;
             }
-            const productsPerPage = 20;
-            const totalPages = Math.ceil(productArray.length / productsPerPage);
-            const start = page * productsPerPage;
-            const end = start + productsPerPage;
-            const pageProducts = productArray.slice(start, end);
+
+            // Pokud je aktivní filtr, zobrazíme všechny výsledky bez stránkování
+            let pageProducts, totalPages = 1;
+            if (filter && filter.trim().length > 0) {
+                pageProducts = filteredProducts;
+            } else {
+                const productsPerPage = 20;
+                totalPages = Math.ceil(filteredProducts.length / productsPerPage);
+                const start = page * productsPerPage;
+                const end = start + productsPerPage;
+                pageProducts = filteredProducts.slice(start, end);
+            }
+
             html += '<div class="overflow-x-auto"><table class="w-full"><thead><tr class="bg-gray-100">' +
                 '<th class="p-2 text-left">ID</th>' +
                 '<th class="p-2 text-left">Název</th>' +
@@ -629,25 +632,19 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 `;
             });
             html += '</tbody></table></div>';
-            if (totalPages > 1) {
+            if (!filter && totalPages > 1) {
                 html += '<div class="mt-4 flex justify-center space-x-2">';
                 for (let i = 0; i < totalPages; i++) {
                     html += `<button onclick="displayProductsAdmin(${i})" class="px-3 py-1 rounded ${i === page ? 'bg-blue-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}">${i + 1}</button>`;
                 }
                 html += '</div>';
             }
-            html += `<p class="text-sm text-gray-600 mt-2">Zobrazeno ${pageProducts.length} z ${Object.keys(products).length} produktů</p>`;
+            html += `<p class="text-sm text-gray-600 mt-2">Zobrazeno ${pageProducts.length} z ${filteredProducts.length} produktů</p>`;
             productsListDiv.innerHTML = html;
         }
         
         function filterProductsAdmin(query) {
-            const rows = document.querySelectorAll('#productsTableBody .product-row');
-            const lowerQuery = query.toLowerCase();
-            
-            rows.forEach(row => {
-                const text = row.textContent.toLowerCase();
-                row.style.display = text.includes(lowerQuery) ? '' : 'none';
-            });
+            displayProductsAdmin(0, query);
         }
 
         async function editProduct(productId) {
@@ -889,7 +886,6 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     }[delimiterType];
                 }
 
-                // Použít batch pro efektivnější import
                 let batch = db.batch();
                 let batchCount = 0;
 
@@ -901,28 +897,47 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     if (parts.length >= 3) {
                         let id, name, price;
                         
+                        // Předpokládáme pořadí Název;ID;Cena nebo ID;Název;Cena nebo Název;Cena;ID
+                        // Hledáme šestičíselné ID
                         const idPattern = /^\d{6}$/;
                         
-                        if (idPattern.test(parts[0])) {
-                            id = parts[0];
-                            name = parts[1];
-                            price = parts[2];
-                        } else if (idPattern.test(parts[1])) {
-                            name = parts[0];
-                            id = parts[1];
-                            price = parts[2];
-                        } else if (idPattern.test(parts[2])) {
-                            name = parts[0];
-                            price = parts[1];
-                            id = parts[2];
+                        // Zkusíme najít ID
+                        const idIndex = parts.findIndex(part => idPattern.test(part));
+
+                        if (idIndex !== -1) {
+                            id = parts[idIndex];
+                            // Odstraníme ID z pole parts pro zjednodušení dalšího zpracování
+                            const remainingParts = [...parts];
+                            remainingParts.splice(idIndex, 1);
+
+                            // Pokusíme se najít cenu (poslední číslo, které se dá převést na float)
+                            let priceIndex = -1;
+                            for (let i = remainingParts.length - 1; i >= 0; i--) {
+                                // Vylepšené zpracování ceny: odstraní všechny nečíselné znaky kromě čárky/tečky
+                                const cleanedPrice = remainingParts[i].replace(/[^\d,.-]/g, '').replace(',', '.');
+                                if (!isNaN(parseFloat(cleanedPrice)) && parseFloat(cleanedPrice) >= 0) {
+                                    price = cleanedPrice;
+                                    priceIndex = i;
+                                    break;
+                                }
+                            }
+
+                            if (priceIndex !== -1) {
+                                // Odstraníme cenu z remainingParts
+                                remainingParts.splice(priceIndex, 1);
+                                name = remainingParts.join(' ').trim(); // Zbytek je název
+                            } else {
+                                errors++;
+                                errorDetails.push(`Nelze najít platnou cenu v řádku: "${line}"`);
+                                continue;
+                            }
+
                         } else {
                             errors++;
-                            errorDetails.push(`Neplatné ID v řádku: ${line}`);
+                            errorDetails.push(`Nelze najít platné 6místné ID v řádku: "${line}"`);
                             continue;
                         }
                         
-                        // Vylepšené zpracování ceny - odstraní všechny nečíselné znaky kromě desetinné čárky/tečky
-                        price = price.replace(/[^\d,.-]/g, '').replace(',', '.');
                         const priceNum = parseFloat(price);
                         
                         if (id && name && !isNaN(priceNum) && priceNum >= 0) {
@@ -930,7 +945,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                                 const productRef = db.collection('products').doc(id);
                                 batch.set(productRef, {
                                     name: name,
-                                    price: Math.round(priceNum)
+                                    price: Math.round(priceNum) // Zaokrouhlujeme na celé číslo, pokud je cena v Kč
                                 }, { merge: true }); // merge: true zachová existující data a aktualizuje pouze zadané
                                 imported++;
                                 batchCount++;
@@ -943,15 +958,15 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                                 }
                             } catch (err) {
                                 errors++;
-                                errorDetails.push(`Chyba při importu ${id}: ${err.message}`);
+                                errorDetails.push(`Chyba při zápisu pro ID ${id}: ${err.message} v řádku: "${line}"`);
                             }
                         } else {
                             errors++;
-                            errorDetails.push(`Neplatná data v řádku: ${line}`);
+                            errorDetails.push(`Neplatná nebo chybějící data (ID, Název, Cena) v řádku: "${line}"`);
                         }
                     } else {
                         errors++;
-                        errorDetails.push(`Nedostatek dat v řádku: ${line}`);
+                        errorDetails.push(`Nedostatek oddělených dat (očekávány min. 3 části) v řádku: "${line}"`);
                     }
                 }
 
@@ -963,10 +978,10 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 let resultMessage = `<div class="text-green-600">✅ Import dokončen! Importováno: ${imported} produktů`;
                 if (errors > 0) {
                     resultMessage += `<br><span class="text-yellow-600">⚠️ Chyby: ${errors}</span>`;
-                    if (errorDetails.length > 0 && errorDetails.length <= 5) {
-                        resultMessage += `<br><small class="text-gray-600">${errorDetails.join('<br>')}</small>`;
-                    } else if (errorDetails.length > 5) {
-                        resultMessage += `<br><small class="text-gray-600">První chyby: ${errorDetails.slice(0, 5).join('<br>')}...</small>`;
+                    if (errorDetails.length > 0) {
+                        // Zobrazíme maximálně prvních 10 chyb
+                        const displayErrors = errorDetails.slice(0, 10).join('<br>');
+                        resultMessage += `<br><small class="text-gray-600">Detaily chyb:<br>${displayErrors}${errorDetails.length > 10 ? '<br>...' : ''}</small>`;
                     }
                 }
                 resultMessage += '</div>';
@@ -975,7 +990,8 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 await loadProducts(); // Znovu načíst produkty
                 displayProductsAdmin(); // Aktualizovat zobrazení v admin panelu
             } catch (error) {
-                resultDiv.innerHTML = `<div class="text-red-600">❌ Chyba: ${error.message}</div>`;
+                console.error("Generická chyba při importu produktů:", error);
+                resultDiv.innerHTML = `<div class="text-red-600">❌ Vážná chyba při importu: ${error.message}</div>`;
             }
         }
 
@@ -1200,7 +1216,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 const order = orderDoc.data();
                 let orderCurrentTotal = 0;
                 let orderPaidStatus = order.paid ? 'Zaplaceno' : 'Nezaplaceno';
-                itemsHtmlForEmail += `<div style="margin-bottom:10px;"><b>Tvoje objednávka</b> (${orderPaidStatus}):<ul style="list-style-type: disc; margin-left: 20px;">`;
+                itemsHtmlForEmail += `<div style="margin-bottom:10px;"><ul style="list-style-type: disc; margin-left: 20px;">`;
                 Object.entries(order.items).forEach(([productId, quantity]) => {
                     const product = allProductsMap[productId];
                     const productName = product ? product.name : `Neznámý produkt (ID: ${productId})`;
@@ -1209,7 +1225,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     orderCurrentTotal += itemTotal;
                     itemsHtmlForEmail += `<li style="font-size: 0.95em;">${productName} x ${quantity} (${itemPrice} Kč/ks) = ${itemTotal} Kč</li>`;
                 });
-                itemsHtmlForEmail += `</ul><div style="font-weight: bold; text-align: right;">Celkem objednávka: ${orderCurrentTotal} Kč</div></div>`;
+                itemsHtmlForEmail += `</ul></div>`;
                 totalForUser += orderCurrentTotal;
             });
             const emailContent = `
@@ -1219,6 +1235,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     ${itemsHtmlForEmail}
                 </div>
                 <p style="font-weight: bold; font-size: 1.1em; text-align: right;">Celkem k úhradě: ${totalForUser} Kč</p>
+                <!-- QR_PLACEHOLDER -->
                 <p>Pro platbu prosím použij bankovní převod na účet: <strong>219731465/0300</strong> ve výši <strong>${totalForUser} Kč</strong>.</p>
                 <p style="margin-top: 20px;">Děkujeme za objednávku!</p>
                 <p>S pozdravem,<br>Lukáš Vladyka</p>
@@ -1298,6 +1315,10 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- User Selection (Main Screen) ---
         function searchUsers() {
+            if (orderingDeadline && new Date() > orderingDeadline) {
+                updateOrderingDeadlineUI();
+                return;
+            }
             const query = document.getElementById('userSearch').value.toLowerCase();
             const resultsDiv = document.getElementById('userSearchResults');
             if (query.length < 2) {
@@ -1365,6 +1386,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             try {
                 await db.collection('settings').doc('ordering').set({ deadline: value });
                 alert('Termín uložen!');
+                loadOrderingDeadline(); // aktualizace po změně
             } catch (err) {
                 alert('Chyba při ukládání termínu: ' + err.message);
             }
@@ -1406,6 +1428,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         document.addEventListener('DOMContentLoaded', () => {
             loadUsers();
             loadProducts(); // přidáno, aby produkty byly vždy dostupné
+            loadOrderingDeadline(); // nově načítáme termín objednávek
         });
 
         // --- Opravím, aby selectUser byla dostupná v globálním scope ---
@@ -1466,6 +1489,11 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- Přidání produktu do objednávky (zpřístupnění v globálním scope) ---
         function addProductToOrderManual() {
+            if (orderingDeadline && new Date() > orderingDeadline) {
+                updateOrderingDeadlineUI();
+                alert('Příjem objednávek je uzavřen. Již nelze přidávat produkty.');
+                return;
+            }
             if (!currentUser) {
                 alert('Nejprve vyberte uživatele.');
                 return;
@@ -1597,6 +1625,38 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             updateBilling && updateBilling();
         }
         window.removeProductFromOrder = removeProductFromOrder;
+
+        // --- Firebase a Data Loading ---
+        async function loadOrderingDeadline() {
+            try {
+                const doc = await db.collection('settings').doc('ordering').get();
+                if (doc.exists && doc.data().deadline) {
+                    orderingDeadline = new Date(doc.data().deadline);
+                } else {
+                    orderingDeadline = null;
+                }
+                updateOrderingDeadlineUI();
+            } catch (e) {
+                orderingDeadline = null;
+            }
+        }
+        function updateOrderingDeadlineUI() {
+            const mainScreen = document.getElementById('mainScreen');
+            let infoDiv = document.getElementById('orderingDeadlineInfo');
+            if (!infoDiv) {
+                infoDiv = document.createElement('div');
+                infoDiv.id = 'orderingDeadlineInfo';
+                infoDiv.className = 'mb-4 text-center text-red-600 font-bold';
+                mainScreen.insertBefore(infoDiv, mainScreen.firstChild);
+            }
+            if (orderingDeadline && new Date() > orderingDeadline) {
+                infoDiv.innerText = 'Příjem objednávek je uzavřen.';
+            } else if (orderingDeadline) {
+                infoDiv.innerText = 'Příjem objednávek do: ' + orderingDeadline.toLocaleString('cs-CZ');
+            } else {
+                infoDiv.innerText = '';
+            }
+        }
     </script>
 </body>
 </html>
