@@ -143,7 +143,17 @@
 
                 <div id="ordersTab" class="admin-tab-content">
                     <div class="mb-4 flex justify-between print-hidden">
-                        <h3 class="text-xl font-semibold">Aktuální objednávky</h3>
+                        <div class="flex items-center space-x-4">
+                            <h3 class="text-xl font-semibold">Objednávky</h3>
+                            <div class="flex space-x-2">
+                                <button id="activeOrdersBtn" onclick="switchToActiveOrders()" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">
+                                    Aktivní objednávky
+                                </button>
+                                <button id="archivedOrdersBtn" onclick="switchToArchivedOrders()" class="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500">
+                                    Archivované objednávky
+                                </button>
+                            </div>
+                        </div>
                         <div class="space-x-2">
                             <input type="text" id="orderSearch" placeholder="Hledat uživatele nebo status..." 
                                class="px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -249,6 +259,17 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                         </div>
                         <div id="orderingStatus" class="mt-2 text-sm text-gray-700"></div>
                         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-gray-50 rounded">
+                            <span>Stav objednávání:</span>
+                            <div class="mt-2 sm:mt-0 flex items-center space-x-2">
+                                <button id="openOrderingBtn" onclick="openOrdering()" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
+                                    Otevřít objednávání
+                                </button>
+                                <button id="closeOrderingBtn" onclick="closeOrdering()" class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700">
+                                    Zavřít objednávání
+                                </button>
+                            </div>
+                        </div>
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-gray-50 rounded">
                             <span>Změnit admin heslo:</span>
                             <div class="mt-2 sm:mt-0 flex items-center space-x-2">
                                 <input type="password" id="adminNewPassword" class="px-3 py-2 border rounded-lg" placeholder="Nové heslo">
@@ -280,8 +301,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         let currentOrder = {};
         let currentOrderId = null;
         let orderingDeadline = null;
-        const ADMIN_PASSWORD_KEY = 'admingold_password';
-        const ADMIN_DEFAULT_PASSWORD = 'admin123';
+        let orderingEnabled = true; // Nová proměnná pro stav objednávání
         // Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyAdhvcOnksDf_cUGp5MUfjHnghH4d4KVg8",
@@ -299,17 +319,30 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         const functions = firebase.functions();
         
         // --- Funkce ---
-        function showAdminLogin() {
-            const storedPassword = localStorage.getItem(ADMIN_PASSWORD_KEY);
+        async function showAdminLogin() {
             let passwordPrompt = prompt('Zadejte admin heslo:');
+            if (!passwordPrompt) return; // Uživatel zrušil dialog
 
-            if (passwordPrompt === (storedPassword || ADMIN_DEFAULT_PASSWORD)) {
-                sessionStorage.setItem('isAdminLoggedIn', 'true');
-                document.getElementById('mainScreen').classList.add('hidden');
-                document.getElementById('adminPanel').classList.remove('hidden');
-                loadAdminData(); // Načte data pro admin panel po přihlášení
-            } else if (passwordPrompt) { 
-                alert('Nesprávné heslo');
+            try {
+                const adminDoc = await db.collection('settings').doc('admin').get();
+                if (!adminDoc.exists) {
+                    alert('Chyba: Administrátorský účet nebyl v databázi nalezen.');
+                    return;
+                }
+
+                const correctPassword = adminDoc.data().password;
+
+                if (passwordPrompt === correctPassword) {
+                    sessionStorage.setItem('isAdminLoggedIn', 'true');
+                    document.getElementById('mainScreen').classList.add('hidden');
+                    document.getElementById('adminPanel').classList.remove('hidden');
+                    loadAdminData();
+                } else {
+                    alert('Nesprávné heslo');
+                }
+            } catch (error) {
+                console.error("Chyba při ověřování hesla:", error);
+                alert('Nastala chyba při komunikaci s databází.');
             }
         }
 
@@ -331,6 +364,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             await loadProducts();
             await loadUsers();
             await loadOrders();
+            updateOrderViewButtons(); // Inicializovat stav tlačítek pro zobrazení objednávek
             if (typeof displayProductsAdmin === 'function') displayProductsAdmin();
             if (typeof displayProducts === 'function') displayProducts();
         }
@@ -356,16 +390,56 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- Admin: Orders Tab ---
         let allOrders = []; // Globální proměnná pro všechny objednávky v adminu
+        let currentOrderView = 'active'; // 'active' nebo 'archived'
+        
         async function loadOrders() {
             await loadProducts(); // Zajistí, že produkty jsou aktuální
             try {
-                // Načítáme všechny objednávky pro zobrazení
-                const snapshot = await db.collection('orders').orderBy('timestamp', 'desc').get();
+                // Načítáme pouze aktivní objednávky pro zobrazení
+                const snapshot = await db.collection('orders').where('status', '==', 'active').orderBy('timestamp', 'desc').get();
                 allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })); // ID je zde dokument ID (e-mail uživatele)
                 filterOrders(); // Zobrazíme všechny po načtení (nebo filtrované, pokud je hledání aktivní)
             } catch (error) {
                 console.error("Chyba při načítání objednávek pro admina:", error);
                 alert('Chyba při načítání objednávek pro admina.');
+            }
+        }
+        
+        async function switchToActiveOrders() {
+            currentOrderView = 'active';
+            updateOrderViewButtons();
+            await loadOrders();
+        }
+        
+        async function switchToArchivedOrders() {
+            currentOrderView = 'archived';
+            updateOrderViewButtons();
+            await loadArchivedOrders();
+        }
+        
+        async function loadArchivedOrders() {
+            await loadProducts(); // Zajistí, že produkty jsou aktuální
+            try {
+                // Načítáme pouze archivované objednávky pro zobrazení
+                const snapshot = await db.collection('orders').where('status', '==', 'archived').orderBy('timestamp', 'desc').get();
+                allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                filterOrders();
+            } catch (error) {
+                console.error("Chyba při načítání archivovaných objednávek:", error);
+                alert('Chyba při načítání archivovaných objednávek.');
+            }
+        }
+        
+        function updateOrderViewButtons() {
+            const activeBtn = document.getElementById('activeOrdersBtn');
+            const archivedBtn = document.getElementById('archivedOrdersBtn');
+            
+            if (currentOrderView === 'active') {
+                activeBtn.className = 'bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700';
+                archivedBtn.className = 'bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500';
+            } else {
+                activeBtn.className = 'bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500';
+                archivedBtn.className = 'bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700';
             }
         }
         
@@ -386,7 +460,8 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             const ordersListDiv = document.getElementById('ordersList');
             ordersListDiv.innerHTML = '';
             if (ordersToDisplay.length === 0) {
-                ordersListDiv.innerHTML = '<p class="text-gray-600 p-4">Žádné objednávky k zobrazení.</p>';
+                const viewText = currentOrderView === 'active' ? 'aktivní' : 'archivované';
+                ordersListDiv.innerHTML = `<p class="text-gray-600 p-4">Žádné ${viewText} objednávky k zobrazení.</p>`;
                 return;
             }
             ordersToDisplay.forEach(order => {
@@ -404,9 +479,25 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 // OPRAVA: vylepšená logika pro získání jména uživatele
                 const displayName = order.userName || users[order.userEmail]?.name || users[order.userId]?.name || order.userEmail || order.userId || 'Neznámý uživatel';
                 const paymentStatus = order.paid ? '<span class="text-green-600 font-bold">Zaplaceno</span>' : '<span class="text-red-600 font-bold">Nezaplaceno</span>';
-                const markPaidButton = order.paid 
-                    ? `<button onclick="togglePaymentStatus('${order.id}', false)" class="bg-yellow-500 text-white px-3 py-1 rounded text-sm hover:bg-yellow-600">Označit jako Nezaplaceno</button>`
-                    : `<button onclick="togglePaymentStatus('${order.id}', true)" class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600">Označit jako Zaplaceno</button>`;
+                
+                // Tlačítka pro správu objednávky - liší se podle typu zobrazení
+                let actionButtons = '';
+                if (currentOrderView === 'active') {
+                    const markPaidButton = order.paid 
+                        ? `<button onclick="togglePaymentStatus('${order.id}', false)" class="bg-yellow-500 text-white px-3 py-1 rounded text-sm hover:bg-yellow-600">Označit jako Nezaplaceno</button>`
+                        : `<button onclick="togglePaymentStatus('${order.id}', true)" class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600">Označit jako Zaplaceno</button>`;
+                    actionButtons = `
+                        ${markPaidButton}
+                        <button onclick="deleteOrder('${order.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">Smazat</button>
+                    `;
+                } else {
+                    // Pro archivované objednávky - možnost obnovit nebo trvale smazat
+                    actionButtons = `
+                        <button onclick="restoreOrder('${order.id}')" class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600">Obnovit</button>
+                        <button onclick="deleteOrder('${order.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">Trvale smazat</button>
+                    `;
+                }
+                
                 const orderElement = document.createElement('div');
                 orderElement.className = 'bg-white p-4 rounded-lg shadow-md mb-4 border border-gray-200';
                 orderElement.innerHTML = `
@@ -417,8 +508,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                     <p class="font-bold text-lg text-right">Celkem: ${orderTotal} Kč</p>
                     <p class="text-md font-semibold text-right">Stav platby: ${paymentStatus}</p>
                     <div class="mt-2 flex justify-end space-x-2">
-                        ${markPaidButton}
-                        <button onclick="deleteOrder('${order.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">Smazat</button>
+                        ${actionButtons}
                     </div>
                 `;
                 ordersListDiv.appendChild(orderElement);
@@ -429,7 +519,11 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             try {
                 await db.collection('orders').doc(orderId).update({ paid: isPaid });
                 alert(`Objednávka ${orderId} označena jako ${isPaid ? 'zaplacená' : 'nezaplacená'}.`);
-                loadOrders(); // Znovu načíst objednávky pro aktualizaci zobrazení
+                if (currentOrderView === 'active') {
+                    await loadOrders(); // Znovu načíst objednávky pro aktualizaci zobrazení
+                } else {
+                    await loadArchivedOrders();
+                }
                 updateBilling(); // Aktualizovat i záložku vyúčtování
             } catch (error) {
                 console.error("Chyba při změně statusu platby:", error);
@@ -438,15 +532,37 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
 
         async function deleteOrder(orderId) {
-            if (confirm('Opravdu chcete smazat tuto objednávku? Tato akce je nevratná.')) {
+            const confirmMessage = currentOrderView === 'active' 
+                ? 'Opravdu chcete smazat tuto objednávku? Tato akce je nevratná.'
+                : 'Opravdu chcete trvale smazat tuto archivovanou objednávku? Tato akce je nevratná.';
+            
+            if (confirm(confirmMessage)) {
                 try {
                     await db.collection('orders').doc(orderId).delete();
                     alert('Objednávka smazána!');
-                    loadOrders(); 
+                    if (currentOrderView === 'active') {
+                        await loadOrders();
+                    } else {
+                        await loadArchivedOrders();
+                    }
                     updateBilling(); // Aktualizovat i záložku vyúčtování
                 } catch (error) {
                     console.error("Chyba při mazání objednávky:", error);
                     alert('Chyba při mazání objednávky: ' + error.message);
+                }
+            }
+        }
+        
+        async function restoreOrder(orderId) {
+            if (confirm('Opravdu chcete obnovit tuto archivovanou objednávku?')) {
+                try {
+                    await db.collection('orders').doc(orderId).update({ status: 'active' });
+                    alert('Objednávka obnovena!');
+                    await loadArchivedOrders(); // Znovu načíst archivované objednávky
+                    updateBilling(); // Aktualizovat i záložku vyúčtování
+                } catch (error) {
+                    console.error("Chyba při obnovování objednávky:", error);
+                    alert('Chyba při obnovování objednávky: ' + error.message);
                 }
             }
         }
@@ -475,8 +591,10 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 });
             });
 
+            const viewText = currentOrderView === 'active' ? 'Aktivní objednávky' : 'Archivované objednávky';
             printWindow.document.write('<h1 style="text-align: center;">ADRIA GOLD - Přehled objednávek</h1>');
             printWindow.document.write('<p style="text-align: center;">Datum: ' + new Date().toLocaleDateString('cs-CZ') + '</p>');
+            printWindow.document.write('<p style="text-align: center; font-weight: bold; color: #666;">' + viewText + '</p>');
 
             printWindow.document.write('<h2 style="text-align: center; margin-top: 30px;">Souhrn produktů pro přípravu:</h2>');
             printWindow.document.write('<table><thead><tr><th>Produkt</th><th style="text-align:center;">ID</th><th style="text-align:center;">Celkem kusů</th></tr></thead><tbody>');
@@ -541,7 +659,8 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         async function exportOrdersToCSV() {
             if (!allOrders || allOrders.length === 0) {
-                alert('Nejsou žádné objednávky k exportu.');
+                const viewText = currentOrderView === 'active' ? 'aktivní' : 'archivované';
+                alert(`Nejsou žádné ${viewText} objednávky k exportu.`);
                 return;
             }
 
@@ -560,16 +679,18 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 csvContent += `${productId};${totalQuantity}\n`;
             });
 
+            const viewText = currentOrderView === 'active' ? 'aktivni' : 'archivovane';
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.setAttribute('href', url);
-            link.setAttribute('download', `objednavky_souhrn_${new Date().toISOString().slice(0,10)}.csv`);
+            link.setAttribute('download', `objednavky_${viewText}_souhrn_${new Date().toISOString().slice(0,10)}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
-            alert('Souhrnný export produktů do CSV byl vytvořen!');
+            const successText = currentOrderView === 'active' ? 'aktivních' : 'archivovaných';
+            alert(`Souhrnný export ${successText} produktů do CSV byl vytvořen!`);
         }
         
         // --- Admin: Products Tab ---
@@ -1269,7 +1390,22 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 batch.update(doc.ref, { status: 'archived' });
             });
             await batch.commit();
-            alert('Všechny aktivní objednávky byly archivovány.');
+            
+            // Zavřít objednávání po resetu - ponechá možnost objednávání zavřené
+            try {
+                await db.collection('settings').doc('ordering').update({ 
+                    enabled: false,
+                    deadline: null // Smazat termín objednávek
+                });
+                orderingEnabled = false;
+                orderingDeadline = null;
+                updateOrderingDeadlineUI();
+                updateOrderingButtons();
+                alert('Všechny aktivní objednávky byly archivovány. Objednávání zůstává uzavřené - můžete ho otevřít ručně pomocí tlačítka "Otevřít objednávání".');
+            } catch (err) {
+                alert('Objednávky byly archivovány, ale chyba při zavírání objednávání: ' + err.message);
+            }
+            
             await loadOrders(); // Znovu načíst objednávky, aby se správně propsaly produkty
         }
 
@@ -1315,7 +1451,7 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- User Selection (Main Screen) ---
         function searchUsers() {
-            if (orderingDeadline && new Date() > orderingDeadline) {
+            if (!orderingEnabled || (orderingDeadline && new Date() > orderingDeadline)) {
                 updateOrderingDeadlineUI();
                 return;
             }
@@ -1384,7 +1520,10 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 return;
             }
             try {
-                await db.collection('settings').doc('ordering').set({ deadline: value });
+                await db.collection('settings').doc('ordering').set({ 
+                    deadline: value,
+                    enabled: true // Zajistit, že objednávání je otevřeno při nastavení termínu
+                });
                 alert('Termín uložen!');
                 loadOrderingDeadline(); // aktualizace po změně
             } catch (err) {
@@ -1392,6 +1531,50 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             }
         }
         window.setOrderingDeadline = setOrderingDeadline;
+
+        // --- Funkce pro otevírání a zavírání objednávání ---
+        async function openOrdering() {
+            try {
+                await db.collection('settings').doc('ordering').update({ enabled: true });
+                orderingEnabled = true;
+                updateOrderingDeadlineUI();
+                updateOrderingButtons();
+                alert('Objednávání bylo otevřeno!');
+            } catch (err) {
+                alert('Chyba při otevírání objednávání: ' + err.message);
+            }
+        }
+        window.openOrdering = openOrdering;
+
+        async function closeOrdering() {
+            try {
+                await db.collection('settings').doc('ordering').update({ enabled: false });
+                orderingEnabled = false;
+                updateOrderingDeadlineUI();
+                updateOrderingButtons();
+                alert('Objednávání bylo uzavřeno!');
+            } catch (err) {
+                alert('Chyba při zavírání objednávání: ' + err.message);
+            }
+        }
+        window.closeOrdering = closeOrdering;
+
+        function updateOrderingButtons() {
+            const openBtn = document.getElementById('openOrderingBtn');
+            const closeBtn = document.getElementById('closeOrderingBtn');
+            
+            if (orderingEnabled) {
+                openBtn.disabled = true;
+                openBtn.className = 'bg-gray-400 text-white px-4 py-2 rounded-lg cursor-not-allowed';
+                closeBtn.disabled = false;
+                closeBtn.className = 'bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700';
+            } else {
+                openBtn.disabled = false;
+                openBtn.className = 'bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700';
+                closeBtn.disabled = true;
+                closeBtn.className = 'bg-gray-400 text-white px-4 py-2 rounded-lg cursor-not-allowed';
+            }
+        }
 
         // --- QR generátor ---
         function generatePaymentQR(userEmail, amount, userName) {
@@ -1413,14 +1596,32 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
 
         // --- Oprava funkce změny hesla ---
         async function changeAdminPassword() {
-            const newPassword = document.getElementById('adminNewPassword').value;
-            if (!newPassword || newPassword.length < 4) {
-                alert('Zadejte nové heslo (alespoň 4 znaky).');
+            // Ověříme, zda je uživatel přihlášen jako admin
+            if (sessionStorage.getItem('isAdminLoggedIn') !== 'true') {
+                alert('Pro změnu hesla musíte být přihlášen.');
                 return;
             }
-            localStorage.setItem(ADMIN_PASSWORD_KEY, newPassword);
-            document.getElementById('adminNewPassword').value = '';
-            document.getElementById('passwordChangeStatus').innerText = 'Heslo změněno!';
+
+            const newPassword = document.getElementById('adminNewPassword').value;
+            if (!newPassword || newPassword.length < 6) { // Doporučuji delší heslo
+                alert('Zadejte nové heslo (alespoň 6 znaků).');
+                return;
+            }
+
+            if (!confirm('Opravdu chcete změnit administrátorské heslo?')) return;
+
+            try {
+                await db.collection('settings').doc('admin').update({
+                    password: newPassword
+                });
+                document.getElementById('adminNewPassword').value = '';
+                document.getElementById('passwordChangeStatus').innerText = '✅ Heslo úspěšně změněno!';
+                alert('Heslo bylo úspěšně změněno.');
+            } catch (error) {
+                console.error("Chyba při změně hesla:", error);
+                document.getElementById('passwordChangeStatus').innerText = '❌ Chyba při změně hesla.';
+                alert('Nastala chyba při ukládání nového hesla.');
+            }
         }
         window.changeAdminPassword = changeAdminPassword;
 
@@ -1484,12 +1685,37 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
             document.getElementById('selectedProductName').innerText = product.name;
             document.getElementById('selectedProductId').value = product.id;
             document.getElementById('manualProductAdd').classList.remove('hidden');
+            
+            // Synchronizovat množství s aktuálním množstvím v objednávce
+            if (currentUser) {
+                db.collection('orders')
+                    .where('userId', '==', currentUser.id || currentUser.email)
+                    .where('status', '==', 'active')
+                    .limit(1)
+                    .get()
+                    .then(snapshot => {
+                        if (!snapshot.empty) {
+                            const order = snapshot.docs[0].data();
+                            if (order.items && order.items[productId]) {
+                                document.getElementById('productQuantityInput').value = order.items[productId];
+                            } else {
+                                document.getElementById('productQuantityInput').value = '1';
+                            }
+                        } else {
+                            document.getElementById('productQuantityInput').value = '1';
+                        }
+                    })
+                    .catch(err => {
+                        console.error("Chyba při synchronizaci množství:", err);
+                        document.getElementById('productQuantityInput').value = '1';
+                    });
+            }
         }
         window.selectProduct = selectProduct;
 
         // --- Přidání produktu do objednávky (zpřístupnění v globálním scope) ---
         function addProductToOrderManual() {
-            if (orderingDeadline && new Date() > orderingDeadline) {
+            if (!orderingEnabled || (orderingDeadline && new Date() > orderingDeadline)) {
                 updateOrderingDeadlineUI();
                 alert('Příjem objednávek je uzavřen. Již nelze přidávat produkty.');
                 return;
@@ -1542,11 +1768,25 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                   });
                 }
               })
-              .then(() => {
+              .then(async () => {
                 alert('Produkt přidán/aktualizován v objednávce!');
                 loadOrders && loadOrders();
                 updateBilling && updateBilling();
                 renderCurrentUserOrder(); // přidáno
+                
+                // Synchronizovat množství v sekci "Přidejte produkty" s aktuálním množstvím v objednávce
+                const currentOrderSnapshot = await db.collection('orders')
+                    .where('userId', '==', currentUser.id || currentUser.email)
+                    .where('status', '==', 'active')
+                    .limit(1)
+                    .get();
+                
+                if (!currentOrderSnapshot.empty) {
+                    const currentOrder = currentOrderSnapshot.docs[0].data();
+                    if (currentOrder.items && currentOrder.items[productId]) {
+                        document.getElementById('productQuantityInput').value = currentOrder.items[productId];
+                    }
+                }
               })
               .catch(err => {
                 alert('Chyba při přidávání produktu do objednávky: ' + err.message);
@@ -1580,7 +1820,24 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 if (!product) return;
                 const itemTotal = product.price * quantity;
                 total += itemTotal;
-                html += `<tr><td class='p-2'>${product.name}</td><td class='text-center p-2'>${quantity}</td><td class='text-right p-2'>${product.price} Kč</td><td class='text-right p-2'>${itemTotal} Kč</td><td class='text-center p-2'><button onclick="removeProductFromOrder('${productId}')" title='Odebrat produkt' class='text-red-600 hover:text-red-800'><svg xmlns='http://www.w3.org/2000/svg' class='inline w-5 h-5' fill='none' viewBox='0 0 24 24' stroke='currentColor'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M6 18L18 6M6 6l12 12'/></svg></button></td></tr>`;
+                html += `<tr>
+                    <td class='p-2'>${product.name}</td>
+                    <td class='text-center p-2'>
+                        <input type="number" value="${quantity}" min="1" 
+                               class="w-16 px-2 py-1 border rounded text-center text-sm"
+                               onchange="updateProductQuantity('${productId}', this.value)"
+                               onblur="this.value = Math.max(1, parseInt(this.value) || 1)">
+                    </td>
+                    <td class='text-right p-2'>${product.price} Kč</td>
+                    <td class='text-right p-2'>${itemTotal} Kč</td>
+                    <td class='text-center p-2'>
+                        <button onclick="removeProductFromOrder('${productId}')" title='Odebrat produkt' class='text-red-600 hover:text-red-800'>
+                            <svg xmlns='http://www.w3.org/2000/svg' class='inline w-5 h-5' fill='none' viewBox='0 0 24 24' stroke='currentColor'>
+                                <path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M6 18L18 6M6 6l12 12'/>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>`;
             });
             document.getElementById('orderItems').innerHTML = html;
             document.getElementById('totalPrice').innerText = total + ' Kč';
@@ -1626,18 +1883,96 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
         }
         window.removeProductFromOrder = removeProductFromOrder;
 
+        // --- Aktualizace množství produktu v objednávce (synchronizace mezi sekcemi) ---
+        async function updateProductQuantity(productId, newQuantity) {
+            if (!currentUser) {
+                alert('Nejprve vyberte uživatele.');
+                return;
+            }
+            
+            newQuantity = parseInt(newQuantity);
+            if (!newQuantity || newQuantity < 1) {
+                alert('Zadejte platné množství (alespoň 1).');
+                renderCurrentUserOrder(); // Obnovit zobrazení s původní hodnotou
+                return;
+            }
+
+            // Najdi aktivní objednávku pro aktuálního uživatele
+            const snapshot = await db.collection('orders')
+                .where('userId', '==', currentUser.id || currentUser.email)
+                .where('status', '==', 'active')
+                .limit(1)
+                .get();
+            
+            if (snapshot.empty) {
+                alert('Objednávka nenalezena.');
+                return;
+            }
+
+            const orderRef = snapshot.docs[0].ref;
+            const orderData = snapshot.docs[0].data();
+            
+            if (!orderData.items || !orderData.items[productId]) {
+                alert('Produkt v objednávce nenalezen.');
+                return;
+            }
+
+            // Aktualizovat množství v objednávce
+            orderData.items[productId] = newQuantity;
+            
+            // Přepočítat celkovou cenu
+            let total = 0;
+            Object.entries(orderData.items).forEach(([pid, qty]) => {
+                const prod = products[pid];
+                if (prod) total += prod.price * qty;
+            });
+            orderData.totalPrice = total;
+
+            try {
+                await orderRef.update({ items: orderData.items, totalPrice: total });
+                
+                // Synchronizovat množství v sekci "Přidejte produkty" pokud je tam stejný produkt vybraný
+                const selectedProductId = document.getElementById('selectedProductId').value;
+                if (selectedProductId === productId) {
+                    document.getElementById('productQuantityInput').value = newQuantity;
+                }
+                
+                // Obnovit zobrazení objednávky
+                renderCurrentUserOrder();
+                loadOrders && loadOrders();
+                updateBilling && updateBilling();
+            } catch (error) {
+                console.error("Chyba při aktualizaci množství:", error);
+                alert('Chyba při aktualizaci množství: ' + error.message);
+                renderCurrentUserOrder(); // Obnovit zobrazení s původní hodnotou
+            }
+        }
+        window.updateProductQuantity = updateProductQuantity;
+
         // --- Firebase a Data Loading ---
         async function loadOrderingDeadline() {
             try {
                 const doc = await db.collection('settings').doc('ordering').get();
-                if (doc.exists && doc.data().deadline) {
-                    orderingDeadline = new Date(doc.data().deadline);
+                if (doc.exists) {
+                    const data = doc.data();
+                    if (data.deadline) {
+                        orderingDeadline = new Date(data.deadline);
+                    } else {
+                        orderingDeadline = null;
+                    }
+                    // Načíst stav objednávání (výchozí je true pokud není nastaveno)
+                    orderingEnabled = data.enabled !== false;
                 } else {
                     orderingDeadline = null;
+                    orderingEnabled = true;
                 }
                 updateOrderingDeadlineUI();
+                updateOrderingButtons();
             } catch (e) {
                 orderingDeadline = null;
+                orderingEnabled = true;
+                updateOrderingDeadlineUI();
+                updateOrderingButtons();
             }
         }
         function updateOrderingDeadlineUI() {
@@ -1649,12 +1984,20 @@ Jogurt prolévaný ovocem 2,4l;705015;307"></textarea>
                 infoDiv.className = 'mb-4 text-center text-red-600 font-bold';
                 mainScreen.insertBefore(infoDiv, mainScreen.firstChild);
             }
-            if (orderingDeadline && new Date() > orderingDeadline) {
+            
+            // Kontrola, zda je objednávání povoleno
+            if (!orderingEnabled) {
                 infoDiv.innerText = 'Příjem objednávek je uzavřen.';
+                infoDiv.className = 'mb-4 text-center text-red-600 font-bold';
+            } else if (orderingDeadline && new Date() > orderingDeadline) {
+                infoDiv.innerText = 'Příjem objednávek je uzavřen.';
+                infoDiv.className = 'mb-4 text-center text-red-600 font-bold';
             } else if (orderingDeadline) {
                 infoDiv.innerText = 'Příjem objednávek do: ' + orderingDeadline.toLocaleString('cs-CZ');
+                infoDiv.className = 'mb-4 text-center text-blue-600 font-bold';
             } else {
-                infoDiv.innerText = '';
+                infoDiv.innerText = 'Příjem objednávek je otevřen.';
+                infoDiv.className = 'mb-4 text-center text-green-600 font-bold';
             }
         }
     </script>
